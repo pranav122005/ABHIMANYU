@@ -88,6 +88,9 @@ inline void dtn_safe_strcpy(char* dest, const char* src, size_t max_len) {
 #define DEFAULT_TRANSFER_RATE_BPS 250000.0f ///< Radio transfer rate: 250 KB/sec
 #define DEFAULT_TRANSFER_OVERHEAD_MS 50     ///< Radio connection establishment overhead (ms)
 
+#define MAX_PACKET_RETRIES           3      ///< Max immediate transmission attempts before backoff
+#define RETRY_BACKOFF_MS           500      ///< Minimum backoff between failed transmission retries (ms)
+
 // ============================================================================
 // Node Configuration Struct
 // ============================================================================

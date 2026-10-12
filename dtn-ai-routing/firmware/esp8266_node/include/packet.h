@@ -40,6 +40,8 @@ struct Packet {
     uint8_t payload[MAX_PAYLOAD_BYTES];     ///< Raw payload buffer
     uint16_t payload_len;                   ///< Actual payload length in bytes
     ForwardingState state;                  ///< Lifecycle state
+    uint8_t retry_count;                    ///< Forwarding attempt count
+    uint32_t next_retry_time_ms;            ///< Earliest timestamp for next retry attempt (ms)
 
     Packet();
 

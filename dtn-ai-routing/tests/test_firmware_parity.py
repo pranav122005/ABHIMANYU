@@ -90,7 +90,7 @@ def test_firmware_cxx_test_harness_compilation_and_execution():
     # Run
     res_run = subprocess.run([str(exe_file)], capture_output=True, text=True, cwd=str(PROJECT_ROOT))
     assert res_run.returncode == 0, f"Firmware tests failed:\n{res_run.stdout}\n{res_run.stderr}"
-    assert "Results: 10 / 10 passed." in res_run.stdout, f"Not all tests passed:\n{res_run.stdout}"
+    assert "Results: 22 / 22 passed." in res_run.stdout, f"Not all tests passed:\n{res_run.stdout}"
 
 
 def test_esp8266_toolchain_presence():
@@ -130,5 +130,47 @@ def test_platformio_target_compilation():
     bin_file = FIRMWARE_DIR / ".pio" / "build" / "nodemcuv2" / "firmware.bin"
     assert elf_file.exists(), "Target firmware.elf does not exist"
     assert bin_file.exists(), "Target firmware.bin does not exist"
+
+
+def test_firmware_realistic_scenarios_validation():
+    """
+    Verifies that all 12 realistic host DTN lifecycle scenarios execute and pass:
+    1. Packet buffered for later forwarding
+    2. No peer available, packet remains queued
+    3. Send fails, packet eligible for later retry with backoff
+    4. Duplicate packet suppression (both destination and transit)
+    5. Packet expires while buffered (pruned on TTL expiry)
+    6. Destination reachable, direct delivery completes
+    7. Packet relayed through intermediate node
+    8. Buffer slot limit enforced (rejection on count full)
+    9. Buffer byte limit enforced (rejection on bytes full)
+    10. In-flight transmission protection (concurrent forwarding prevented)
+    11. Missing acknowledgement handling (bounded retry backoff to STATE_FAILED)
+    12. Timer rollover safety across uint32_t wrap-around
+    """
+    exe_file = TESTS_DIR / "test_firmware.exe"
+    assert exe_file.exists(), "Binary executable not found; must compile first"
+
+    res_run = subprocess.run([str(exe_file)], capture_output=True, text=True, cwd=str(PROJECT_ROOT))
+    assert res_run.returncode == 0, f"Host test runner returned error code: {res_run.returncode}"
+
+    scenarios = [
+        "test_scenario_1_buffered_for_later_forwarding",
+        "test_scenario_2_no_peer_available_packet_remains_queued",
+        "test_scenario_3_send_fails_eligible_for_later_retry",
+        "test_scenario_4_duplicate_packet_suppression",
+        "test_scenario_5_packet_expires_while_buffered",
+        "test_scenario_6_destination_reachable_delivery_completes",
+        "test_scenario_7_relayed_through_intermediate_node",
+        "test_scenario_8_buffer_slot_limit_enforced",
+        "test_scenario_9_buffer_byte_limit_enforced",
+        "test_scenario_10_concurrent_transmission_protection",
+        "test_scenario_11_missing_acknowledgement_handling",
+        "test_scenario_12_timer_rollover_lifecycle",
+    ]
+
+    for sc in scenarios:
+        assert f"[RUNNING] {sc}... PASSED" in res_run.stdout, f"Scenario failed or missing: {sc}"
+
 
 

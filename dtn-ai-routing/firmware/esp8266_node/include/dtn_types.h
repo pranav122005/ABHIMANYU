@@ -33,7 +33,8 @@ typedef enum {
     STATE_TRANSMITTING,            ///< Transmission initiated over radio transport
     STATE_FORWARDED,               ///< Successfully transferred to relay peer (acknowledged)
     STATE_DELIVERED,               ///< Handed directly to destination node
-    STATE_EXPIRED                  ///< TTL expired before successful forwarding
+    STATE_EXPIRED,                 ///< TTL expired before successful forwarding
+    STATE_FAILED                   ///< Transmission failed or unacknowledged after max retries
 } ForwardingState;
 
 /**

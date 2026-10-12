@@ -22,7 +22,9 @@ public:
           rx_tail_(0),
           rx_count_(0),
           tx_count_(0),
-          active_peer_count_(0)
+          active_peer_count_(0),
+          simulate_tx_failure_(false),
+          fail_next_send_(false)
     {
         memset(rx_senders_, 0, sizeof(rx_senders_));
         memset(last_tx_peer_, 0, sizeof(last_tx_peer_));
@@ -37,6 +39,13 @@ public:
     }
 
     virtual bool send_packet(const char* target_peer, const Packet& pkt) override {
+        if (simulate_tx_failure_) {
+            return false;
+        }
+        if (fail_next_send_) {
+            fail_next_send_ = false;
+            return false;
+        }
         if (!target_peer || !is_peer_in_range(target_peer)) {
             return false;
         }
@@ -126,6 +135,9 @@ public:
     const char* get_last_tx_peer() const { return last_tx_peer_; }
     const Packet& get_last_tx_packet() const { return last_tx_packet_; }
 
+    void set_simulate_tx_failure(bool fail) { simulate_tx_failure_ = fail; }
+    void set_fail_next_send(bool fail) { fail_next_send_ = fail; }
+
 private:
     LinkStatus link_status_;
 
@@ -141,6 +153,9 @@ private:
 
     char active_peers_[FAKE_MAX_PEERS][NODE_ID_MAX_LEN];
     size_t active_peer_count_;
+
+    bool simulate_tx_failure_;
+    bool fail_next_send_;
 };
 
 #endif // FAKE_TRANSPORT_H

@@ -11,6 +11,8 @@ Packet::Packet() {
     memset(payload, 0, sizeof(payload));
     payload_len = 0;
     state = STATE_PENDING;
+    retry_count = 0;
+    next_retry_time_ms = 0;
 }
 
 Packet Packet::create(
@@ -34,6 +36,8 @@ Packet Packet::create(
     pkt.header.creation_time_ms = creation_ms;
     pkt.header.expiry_time_ms = creation_ms + ttl_ms;
     pkt.state = STATE_PENDING;
+    pkt.retry_count = 0;
+    pkt.next_retry_time_ms = 0;
 
     if (p_data && p_len > 0) {
         uint16_t copy_len = (p_len > MAX_PAYLOAD_BYTES) ? MAX_PAYLOAD_BYTES : p_len;
@@ -183,5 +187,7 @@ bool Packet::deserialize(const uint8_t* in_buf, size_t len) {
         memcpy(payload, in_buf + PACKET_WIRE_MIN_BYTES, payload_len);
     }
     state = STATE_PENDING;
+    retry_count = 0;
+    next_retry_time_ms = 0;
     return true;
 }

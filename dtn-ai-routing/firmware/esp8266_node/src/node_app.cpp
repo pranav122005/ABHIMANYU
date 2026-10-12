@@ -78,6 +78,9 @@ void NodeApp::notify_peer_contact(const char* peer_id, bool in_contact, uint32_t
         rec->current_contact_start_ms = current_time_ms;
         rec->encounter_count++;
         logger_.log(current_time_ms, EVT_PEER_DISCOVERED, peer_id);
+
+        // Reset failed packets to PENDING so new encounter can retry them
+        reset_failed_packets();
     } else if (!in_contact && rec->is_in_contact) {
         // Contact lost
         rec->is_in_contact = false;
@@ -129,6 +132,11 @@ void NodeApp::step_receive_packets(uint32_t current_time_ms) {
     while (transport_.receive_packet(sender, in_pkt)) {
         // Check if destination is this node
         if (strcmp(in_pkt.header.destination, config_.node_id) == 0) {
+            // Check duplicate suppression filter to prevent repeated destination delivery
+            if (buffer_.is_seen(in_pkt.header.packet_id)) {
+                continue;
+            }
+            in_pkt.state = STATE_DELIVERED;
             packets_delivered_++;
             buffer_.mark_seen(in_pkt.header.packet_id);
             logger_.log(current_time_ms, EVT_PACKET_DELIVERED, in_pkt.header.packet_id);
@@ -180,8 +188,15 @@ void NodeApp::step_route_and_forward(uint32_t current_time_ms) {
                 continue;
             }
 
+            // Check retry backoff (rollover-safe signed comparison)
+            if (pkt->next_retry_time_ms != 0 &&
+                static_cast<int32_t>(current_time_ms - pkt->next_retry_time_ms) < 0) {
+                continue; // Backoff active: avoid infinite tight retry loop
+            }
+
             // Ask pluggable routing engine (Stage 5.2 Decision Tree)
             if (router_.should_forward(*pkt, ctx)) {
+                // Initiation of transmission
                 pkt->state = STATE_TRANSMITTING;
                 bool tx_ok = transport_.send_packet(peer.peer_id, *pkt);
 
@@ -191,19 +206,30 @@ void NodeApp::step_route_and_forward(uint32_t current_time_ms) {
                     dtn_safe_strcpy(pkt_id, pkt->header.packet_id, PACKET_ID_MAX_LEN);
 
                     if (strcmp(peer.peer_id, pkt->header.destination) == 0) {
+                        pkt->state = STATE_DELIVERED;
                         packets_delivered_++;
+                        buffer_.mark_seen(pkt_id);
                         logger_.log(current_time_ms, EVT_PACKET_DELIVERED, pkt_id);
                     } else {
+                        pkt->state = STATE_FORWARDED;
                         packets_forwarded_++;
+                        buffer_.mark_seen(pkt_id);
                         logger_.log(current_time_ms, EVT_PACKET_FORWARDED, pkt_id);
                     }
 
-                    // Remove from local buffer after acknowledged forwarding
+                    // Remove from local buffer after positively acknowledged forwarding
                     buffer_.remove(pkt_id);
                     // Transmit at most one packet per peer per tick to keep loop responsive
                     break;
                 } else {
-                    pkt->state = STATE_PENDING;
+                    // Transmission failed or unacknowledged: bound retry attempts
+                    pkt->retry_count++;
+                    pkt->next_retry_time_ms = current_time_ms + RETRY_BACKOFF_MS;
+                    if (pkt->retry_count >= MAX_PACKET_RETRIES) {
+                        pkt->state = STATE_FAILED;
+                    } else {
+                        pkt->state = STATE_PENDING;
+                    }
                 }
             }
         }
@@ -267,3 +293,15 @@ void NodeApp::tick(uint32_t current_time_ms) {
     step_condition_reporting(current_time_ms);
     step_display_update(current_time_ms);
 }
+
+void NodeApp::reset_failed_packets() {
+    for (size_t s = 0; s < buffer_.capacity_slots(); ++s) {
+        Packet* p = buffer_.get_slot(s);
+        if (p && p->state == STATE_FAILED) {
+            p->state = STATE_PENDING;
+            p->retry_count = 0;
+            p->next_retry_time_ms = 0;
+        }
+    }
+}
+

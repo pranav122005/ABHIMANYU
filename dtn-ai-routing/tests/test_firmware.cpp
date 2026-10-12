@@ -516,6 +516,470 @@ bool test_deterministic_ai_and_firmware_self_test() {
 }
 
 // ============================================================================
+// Scenario 1: A packet arrives and is buffered for later forwarding
+// ============================================================================
+bool test_scenario_1_buffered_for_later_forwarding() {
+    NodeConfig cfg = NodeConfig::create_default("nodeRelay");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    // Inbound transit packet: from nodeSrc, addressed to nodeDest
+    Packet transit_pkt = Packet::create("pkt_transit_01", "nodeSrc", "nodeDest", 100, 2, 1000, 10000);
+    transport.inject_incoming_packet("nodeSrc", transit_pkt);
+
+    // Tick with no peers in range
+    app.tick(1000);
+
+    TEST_ASSERT(app.get_packets_received() == 1, "Packet should be recorded as received");
+    TEST_ASSERT(app.get_packets_delivered() == 0, "Packet must not be marked delivered locally");
+    TEST_ASSERT(app.get_packets_forwarded() == 0, "Packet must not be forwarded yet");
+    TEST_ASSERT(buffer.count() == 1, "Packet must be stored in local buffer");
+
+    Packet* p = buffer.get("pkt_transit_01");
+    TEST_ASSERT(p != nullptr, "Buffered packet must be retrievable");
+    TEST_ASSERT(p->state == STATE_PENDING, "Buffered packet must be in STATE_PENDING");
+    return true;
+}
+
+// ============================================================================
+// Scenario 2: No peer is available; the packet remains queued
+// ============================================================================
+bool test_scenario_2_no_peer_available_packet_remains_queued() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    BufferOutcome res = app.generate_packet("pkt_wait_01", "nodeDest", 100, 1, 10000, 1000);
+    TEST_ASSERT(res == BUFFER_ACCEPTED, "Generate packet failed");
+
+    // Multiple ticks over elapsed time without any peer discovery
+    for (uint32_t t = 1100; t <= 3000; t += 200) {
+        app.tick(t);
+        TEST_ASSERT(buffer.count() == 1, "Packet must remain in buffer");
+        TEST_ASSERT(app.get_packets_forwarded() == 0, "No forwarding when no peer available");
+        TEST_ASSERT(app.get_packets_dropped() == 0, "No packet drops should occur");
+    }
+
+    Packet* p = buffer.get("pkt_wait_01");
+    TEST_ASSERT(p != nullptr && p->state == STATE_PENDING, "Packet must remain in STATE_PENDING");
+    return true;
+}
+
+// ============================================================================
+// Scenario 3: A send fails; the packet remains eligible for a later retry
+// ============================================================================
+bool test_scenario_3_send_fails_eligible_for_later_retry() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    app.generate_packet("pkt_retry_01", "nodeDest", 100, 2, 50000, 1000);
+
+    // Peer comes in range
+    transport.set_peer_in_range("nodeRelay", true);
+    app.notify_peer_contact("nodeRelay", true, 2000);
+
+    // Simulate transmission failure on first attempt
+    transport.set_fail_next_send(true);
+    app.tick(2000);
+
+    // Packet must NOT be silently dropped or deleted!
+    TEST_ASSERT(buffer.count() == 1, "Packet must NOT be removed from buffer on TX failure");
+    TEST_ASSERT(app.get_packets_forwarded() == 0, "Forwarded count must remain 0 on TX failure");
+
+    Packet* p = buffer.get("pkt_retry_01");
+    TEST_ASSERT(p != nullptr, "Packet must be in buffer");
+    TEST_ASSERT(p->retry_count == 1, "Retry count must be incremented to 1");
+    TEST_ASSERT(p->next_retry_time_ms == 2500, "Next retry time must be current + RETRY_BACKOFF_MS (2500)");
+
+    // Immediate tick within backoff window (e.g. 2100 ms) must NOT retry in tight loop
+    app.tick(2100);
+    TEST_ASSERT(p->retry_count == 1, "Retry count must not advance during active backoff");
+    TEST_ASSERT(app.get_packets_forwarded() == 0, "Still no forwarding during backoff");
+
+    // Tick after backoff elapsed (e.g. 2600 ms) -> transport succeeds!
+    app.tick(2600);
+    TEST_ASSERT(app.get_packets_forwarded() == 1, "Packet must be successfully forwarded on retry");
+    TEST_ASSERT(buffer.count() == 0, "Packet must be removed after successful acknowledged retry");
+    return true;
+}
+
+// ============================================================================
+// Scenario 4: A duplicate packet arrives; it is not delivered or forwarded twice
+// ============================================================================
+bool test_scenario_4_duplicate_packet_suppression() {
+    NodeConfig cfg = NodeConfig::create_default("nodeMe");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    // Case 1: Packet addressed directly to local node arrives twice
+    Packet dest_pkt = Packet::create("pkt_dest_dup", "nodeX", "nodeMe", 50, 1, 1000, 5000);
+    transport.inject_incoming_packet("nodeX", dest_pkt);
+    app.tick(1000);
+    TEST_ASSERT(app.get_packets_delivered() == 1, "First arrival must be delivered");
+
+    // Inject exact same packet again
+    transport.inject_incoming_packet("nodeX", dest_pkt);
+    app.tick(1100);
+    TEST_ASSERT(app.get_packets_delivered() == 1, "Duplicate arrival must NOT increment delivered count");
+
+    // Case 2: Transit packet arrives twice
+    Packet transit_pkt = Packet::create("pkt_trans_dup", "nodeX", "nodeTarget", 50, 1, 1000, 5000);
+    transport.inject_incoming_packet("nodeX", transit_pkt);
+    app.tick(1200);
+    TEST_ASSERT(app.get_packets_received() == 1, "First transit arrival accepted");
+    TEST_ASSERT(buffer.count() == 1, "Buffer holds 1 transit packet");
+
+    // Inject same transit packet while sitting in buffer
+    transport.inject_incoming_packet("nodeX", transit_pkt);
+    app.tick(1300);
+    TEST_ASSERT(app.get_packets_received() == 1, "Duplicate transit packet must NOT increase received count");
+    TEST_ASSERT(buffer.count() == 1, "Buffer still holds 1 transit packet");
+
+    return true;
+}
+
+// ============================================================================
+// Scenario 5: A packet expires while buffered
+// ============================================================================
+bool test_scenario_5_packet_expires_while_buffered() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    // Generate packet with 2000 ms TTL (creation 1000 ms, expires at 3000 ms)
+    app.generate_packet("pkt_exp_01", "nodeDest", 100, 1, 2000, 1000);
+    TEST_ASSERT(buffer.count() == 1, "Packet should be in buffer");
+
+    // Advance clock past expiration (e.g. 3500 ms) and trigger buffer maintenance
+    app.tick(3500);
+    TEST_ASSERT(app.get_packets_expired() == 1, "Packet must be counted as expired");
+    TEST_ASSERT(buffer.count() == 0, "Expired packet must be pruned from buffer");
+    TEST_ASSERT(buffer.get("pkt_exp_01") == nullptr, "Expired packet must be removed");
+    return true;
+}
+
+// ============================================================================
+// Scenario 6: The destination becomes reachable and delivery completes
+// ============================================================================
+bool test_scenario_6_destination_reachable_delivery_completes() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    app.generate_packet("pkt_to_dest", "finalDest", 100, 1, 10000, 1000);
+    TEST_ASSERT(buffer.count() == 1, "Packet should be buffered");
+
+    // Destination node comes directly in range
+    transport.set_peer_in_range("finalDest", true);
+    app.notify_peer_contact("finalDest", true, 2000);
+
+    app.tick(2000);
+    TEST_ASSERT(app.get_packets_delivered() == 1, "Destination delivery must increment packets_delivered");
+    TEST_ASSERT(app.get_packets_forwarded() == 0, "Destination delivery must not count as forwarded relay");
+    TEST_ASSERT(buffer.count() == 0, "Delivered packet must be removed from buffer");
+    TEST_ASSERT(transport.get_tx_count() == 1, "Transport should have executed 1 TX");
+    TEST_ASSERT(strcmp(transport.get_last_tx_peer(), "finalDest") == 0, "Last TX peer must be destination");
+    return true;
+}
+
+// ============================================================================
+// Scenario 7: A packet is relayed through an intermediate node
+// ============================================================================
+bool test_scenario_7_relayed_through_intermediate_node() {
+    // Node A (Originator) -> Node B (Relay) -> Node C (Destination)
+    NodeConfig cfgA = NodeConfig::create_default("nodeA");
+    PacketBuffer bufA(16, 4096);
+    DecisionTreeRouter routerA;
+    FakeTransport txA;
+    NullDisplay dispA;
+    RamStorage storeA;
+    ReportQueue qA;
+    EventLogger logA;
+    NodeApp appA(cfgA, bufA, routerA, txA, dispA, storeA, qA, logA);
+    TEST_ASSERT(appA.init(), "Node A init failed");
+
+    NodeConfig cfgB = NodeConfig::create_default("nodeB");
+    PacketBuffer bufB(16, 4096);
+    DecisionTreeRouter routerB;
+    FakeTransport txB;
+    NullDisplay dispB;
+    RamStorage storeB;
+    ReportQueue qB;
+    EventLogger logB;
+    NodeApp appB(cfgB, bufB, routerB, txB, dispB, storeB, qB, logB);
+    TEST_ASSERT(appB.init(), "Node B init failed");
+
+    // 1. Node A generates packet for Node C
+    appA.generate_packet("pkt_multi_hop", "nodeC", 100, 2, 10000, 1000);
+
+    // 2. Encounter between Node A and Node B
+    txA.set_peer_in_range("nodeB", true);
+    appA.notify_peer_contact("nodeB", true, 2000);
+
+    // Node A forwards to Node B
+    appA.tick(2000);
+    TEST_ASSERT(appA.get_packets_forwarded() == 1, "Node A must record 1 forwarded packet");
+    TEST_ASSERT(bufA.count() == 0, "Node A buffer should now be empty");
+
+    // 3. Node B receives packet from Node A
+    Packet relayed_pkt = txA.get_last_tx_packet();
+    txB.inject_incoming_packet("nodeA", relayed_pkt);
+    appB.tick(2100);
+    TEST_ASSERT(appB.get_packets_received() == 1, "Node B must receive the transit packet");
+    TEST_ASSERT(bufB.count() == 1, "Node B must buffer the transit packet");
+
+    // Node A leaves contact
+    txA.set_peer_in_range("nodeB", false);
+    appA.notify_peer_contact("nodeB", false, 2500);
+
+    // 4. Later, Node B encounters destination Node C
+    txB.set_peer_in_range("nodeC", true);
+    appB.notify_peer_contact("nodeC", true, 3000);
+    appB.tick(3000);
+
+    TEST_ASSERT(appB.get_packets_delivered() == 1, "Node B must deliver packet to destination Node C");
+    TEST_ASSERT(bufB.count() == 0, "Node B buffer must be empty after final delivery");
+    TEST_ASSERT(strcmp(txB.get_last_tx_peer(), "nodeC") == 0, "Last TX recipient must be destination Node C");
+    return true;
+}
+
+// ============================================================================
+// Scenario 8: A buffer reaches its packet-count limit
+// ============================================================================
+bool test_scenario_8_buffer_slot_limit_enforced() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    cfg.max_buffer_packets = 3;
+    PacketBuffer buffer(3, 10000);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    // Fill buffer to capacity (3 packets)
+    TEST_ASSERT(app.generate_packet("p1", "nD", 100, 1, 5000, 1000) == BUFFER_ACCEPTED, "p1 failed");
+    TEST_ASSERT(app.generate_packet("p2", "nD", 100, 1, 5000, 1000) == BUFFER_ACCEPTED, "p2 failed");
+    TEST_ASSERT(app.generate_packet("p3", "nD", 100, 1, 5000, 1000) == BUFFER_ACCEPTED, "p3 failed");
+    TEST_ASSERT(buffer.count() == 3, "Buffer count should be 3");
+
+    // 4th packet must be rejected due to slot limit
+    BufferOutcome res = app.generate_packet("p4", "nD", 100, 1, 5000, 1000);
+    TEST_ASSERT(res == BUFFER_REJECTED_FULL, "p4 must be rejected as full");
+    TEST_ASSERT(buffer.count() == 3, "Buffer count must remain strictly 3");
+    TEST_ASSERT(app.get_packets_dropped() == 1, "Dropped counter must be 1");
+    return true;
+}
+
+// ============================================================================
+// Scenario 9: A buffer reaches its byte limit
+// ============================================================================
+bool test_scenario_9_buffer_byte_limit_enforced() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(10, 500); // Max 500 bytes
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    // Add packet of 300 bytes -> accepted (300/500)
+    TEST_ASSERT(app.generate_packet("p_big1", "nD", 300, 1, 5000, 1000) == BUFFER_ACCEPTED, "p_big1 failed");
+    TEST_ASSERT(buffer.bytes_used() == 300, "bytes_used must be 300");
+
+    // Add second packet of 300 bytes -> 300 + 300 = 600 > 500 -> rejected!
+    BufferOutcome rej = app.generate_packet("p_big2", "nD", 300, 1, 5000, 1000);
+    TEST_ASSERT(rej == BUFFER_REJECTED_FULL, "p_big2 must be rejected due to byte limit");
+    TEST_ASSERT(buffer.bytes_used() == 300, "bytes_used must remain 300");
+
+    // Add smaller packet of 150 bytes -> 300 + 150 = 450 <= 500 -> accepted!
+    TEST_ASSERT(app.generate_packet("p_small", "nD", 150, 1, 5000, 1000) == BUFFER_ACCEPTED, "p_small failed");
+    TEST_ASSERT(buffer.bytes_used() == 450, "bytes_used must be 450");
+    return true;
+}
+
+// ============================================================================
+// Scenario 10: A transmission is in progress; same packet cannot be forwarded concurrently
+// ============================================================================
+bool test_scenario_10_concurrent_transmission_protection() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    app.generate_packet("pkt_tx_guard2", "nodeDest", 100, 1, 10000, 1000);
+    Packet* p = buffer.get("pkt_tx_guard2");
+    TEST_ASSERT(p != nullptr, "Packet must exist");
+
+    // Set state to STATE_TRANSMITTING (in flight)
+    p->state = STATE_TRANSMITTING;
+
+    transport.set_peer_in_range("nodeRelay", true);
+    app.notify_peer_contact("nodeRelay", true, 2000);
+
+    // Tick: router must skip this packet
+    app.tick(2000);
+    TEST_ASSERT(app.get_packets_forwarded() == 0, "In-flight packet must not be forwarded");
+    TEST_ASSERT(transport.get_tx_count() == 0, "No TX should occur while in-flight");
+    TEST_ASSERT(buffer.count() == 1, "Packet must remain in buffer");
+    return true;
+}
+
+// ============================================================================
+// Scenario 11: An acknowledgement or delivery confirmation is missing
+// ============================================================================
+bool test_scenario_11_missing_acknowledgement_handling() {
+    NodeConfig cfg = NodeConfig::create_default("nodeA");
+    PacketBuffer buffer(16, 4096);
+    DecisionTreeRouter router;
+    FakeTransport transport;
+    NullDisplay display;
+    RamStorage storage;
+    ReportQueue report_queue;
+    EventLogger logger;
+
+    NodeApp app(cfg, buffer, router, transport, display, storage, report_queue, logger);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    app.generate_packet("pkt_nack", "nodeDest", 100, 2, 50000, 1000);
+
+    transport.set_peer_in_range("nodeRelay", true);
+    app.notify_peer_contact("nodeRelay", true, 2000);
+
+    // Simulate missing ACK (send_packet returns false)
+    transport.set_simulate_tx_failure(true);
+
+    // Attempt 1 (t = 2000)
+    app.tick(2000);
+    Packet* p = buffer.get("pkt_nack");
+    TEST_ASSERT(p != nullptr, "Packet must remain in buffer");
+    TEST_ASSERT(p->retry_count == 1, "Attempt 1 recorded");
+    TEST_ASSERT(p->state == STATE_PENDING, "State should be PENDING during retries");
+
+    // Attempt 2 (t = 2500)
+    app.tick(2500);
+    TEST_ASSERT(p->retry_count == 2, "Attempt 2 recorded");
+
+    // Attempt 3 (t = 3000) -> reaches MAX_PACKET_RETRIES (3)
+    app.tick(3000);
+    TEST_ASSERT(p->retry_count == 3, "Attempt 3 recorded");
+    TEST_ASSERT(p->state == STATE_FAILED, "State must transition to STATE_FAILED on ACK exhaustion");
+
+    // Subsequent tick (t = 3500) -> router stops hammering in tight loop
+    app.tick(3500);
+    TEST_ASSERT(p->retry_count == 3, "Retry count must not advance once STATE_FAILED");
+    TEST_ASSERT(buffer.count() == 1, "Packet must NOT be dropped; safely preserved in buffer");
+
+    // Resetting failed packets restores STATE_PENDING
+    app.reset_failed_packets();
+    TEST_ASSERT(p->state == STATE_PENDING, "State should return to PENDING after reset");
+    TEST_ASSERT(p->retry_count == 0, "Retry count reset to 0");
+    return true;
+}
+
+// ============================================================================
+// Scenario 12: Timer rollover does not break packet expiry or retry scheduling
+// ============================================================================
+bool test_scenario_12_timer_rollover_lifecycle() {
+    // Creation at 0xFFFFFF00, TTL = 500 ms -> expiry wrapped to 0x000000F4
+    uint32_t creation_ms = 0xFFFFFF00;
+    uint32_t ttl_ms = 500;
+    Packet pkt = Packet::create("pkt_roll", "nodeA", "nodeB", 64, 1, creation_ms, ttl_ms);
+
+    // Check expiry before wrap
+    TEST_ASSERT(!pkt.is_expired(0xFFFFFF50), "Must not be expired at 0xFFFFFF50");
+    TEST_ASSERT(pkt.remaining_ttl_ms(0xFFFFFF50) == 420, "Remaining TTL before wrap mismatch");
+
+    // Check expiry after wrap before expiration
+    TEST_ASSERT(!pkt.is_expired(0x00000050), "Must not be expired at 0x00000050");
+
+    // Check expiry at exact timestamp and beyond
+    TEST_ASSERT(pkt.is_expired(0x000000F4), "Must be expired at 0x000000F4");
+    TEST_ASSERT(pkt.is_expired(0x00000200), "Must be expired at 0x00000200");
+
+    // Retry scheduling across rollover:
+    // now = 0xFFFFFF80, backoff = 500 ms -> next_retry_time_ms = 0x00000174 (wrapped)
+    uint32_t now = 0xFFFFFF80;
+    pkt.next_retry_time_ms = now + RETRY_BACKOFF_MS;
+    TEST_ASSERT(pkt.next_retry_time_ms == (now + RETRY_BACKOFF_MS), "Arithmetic wrap verified");
+
+    // At now = 0xFFFFFF90: 16 ms later, backoff still active
+    uint32_t now_in_backoff = 0xFFFFFF90;
+    bool in_backoff = (static_cast<int32_t>(now_in_backoff - pkt.next_retry_time_ms) < 0);
+    TEST_ASSERT(in_backoff, "Backoff must be active across rollover");
+
+    // At now = 0x00000174: exact backoff expiration
+    uint32_t now_expired = pkt.next_retry_time_ms;
+    bool backoff_done = (static_cast<int32_t>(now_expired - pkt.next_retry_time_ms) >= 0);
+    TEST_ASSERT(backoff_done, "Backoff must be elapsed at exact timestamp across rollover");
+
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 int main() {
@@ -533,6 +997,20 @@ int main() {
     RUN_TEST(test_inflight_packet_isolation);
     RUN_TEST(test_buffer_underflow_safety);
     RUN_TEST(test_deterministic_ai_and_firmware_self_test);
+
+    // Realistic Lifecycle Scenarios 1-12
+    RUN_TEST(test_scenario_1_buffered_for_later_forwarding);
+    RUN_TEST(test_scenario_2_no_peer_available_packet_remains_queued);
+    RUN_TEST(test_scenario_3_send_fails_eligible_for_later_retry);
+    RUN_TEST(test_scenario_4_duplicate_packet_suppression);
+    RUN_TEST(test_scenario_5_packet_expires_while_buffered);
+    RUN_TEST(test_scenario_6_destination_reachable_delivery_completes);
+    RUN_TEST(test_scenario_7_relayed_through_intermediate_node);
+    RUN_TEST(test_scenario_8_buffer_slot_limit_enforced);
+    RUN_TEST(test_scenario_9_buffer_byte_limit_enforced);
+    RUN_TEST(test_scenario_10_concurrent_transmission_protection);
+    RUN_TEST(test_scenario_11_missing_acknowledgement_handling);
+    RUN_TEST(test_scenario_12_timer_rollover_lifecycle);
 
     std::cout << "==============================================================" << std::endl;
     std::cout << " Results: " << g_tests_passed << " / " << g_tests_run << " passed." << std::endl;

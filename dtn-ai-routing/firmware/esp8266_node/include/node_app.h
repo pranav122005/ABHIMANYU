@@ -83,6 +83,11 @@ public:
     uint16_t get_packets_dropped() const { return packets_dropped_; }
     uint16_t get_packets_expired() const { return packets_expired_; }
 
+    /**
+     * @brief Resets any STATE_FAILED packets in buffer to STATE_PENDING for retry.
+     */
+    void reset_failed_packets();
+
 private:
     void step_receive_packets(uint32_t current_time_ms);
     void step_route_and_forward(uint32_t current_time_ms);
