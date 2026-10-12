@@ -1,0 +1,60 @@
+This traceset describes the daily mobility of buses in the urban area
+of Vannes (France). No radio transmission is assumed.
+
+This is a synthetic yet realistic dataset: the mobility of each bus
+has been produced by extracting the characteristics of the bus routes
+from OpenStreetMap
+(https://www.openstreetmap.org/#map=14/47.6556/-2.7565&layers=T), and
+combining these routes with the bus company's timetables
+(http://www.kiceo.fr, as of 2017).
+
+The resulting dataset involves 60 buses covering the city, between
+05:25 AM and 7h39 PM. These buses do not necessarily start and stop
+running at the same time. Besides, a few of them only run at specific
+periods during the day. These are typically school buses that
+transport students to school or back home. The scenario therefore
+exhibits moderate churn, as the number of running buses is not stable
+over time.
+
+A video showing the buses running in the city is available at
+https://casa-irisa.univ-ubs.fr/download/videos/kiceo_large.mp4
+
+Duration of the scenario   : 14h14' (from 05h25' to 19h39')
+Nb of nodes (buses)        : 60 (total) / 56 (max active simultaneously)
+Activity duration per node : 26’ / 14h08’ / 10h58’ / 3h26’ (*)
+
+
+(* = min / max / avg / stdev values)
+
+The data provided in this dataset describe a time-varying graph (TVG)
+whose nodes model buses. This TVG is formatted according to the DGS file format
+described below.
+
+Files using this format can be processed by the GraphStream library
+(https://graphstream-project.org), or by the LEPTON emulation platform
+(https://casa-irisa.univ-ubs.fr/lepton).
+
+The DGS file format specification is available in
+https://graphstream-project.org/doc/Advanced-Concepts/The-DGS-File-Format.
+
+Below are further details about how this format is used in this dataset:
+
+- the timesteps are specified in milliseconds, starting at time
+  0.
+
+- timestep values are specified relatively to a reference time, which
+  is specified as graph attribute 'ref_time=19500000' (i.e., 05:25 AM).
+
+- node coordinates are updated every second. They are specified as x
+  and y attributes (cartesian coordinates expressed in meters).
+
+- all node coordinates are specified relatively to a reference point
+  whose coordinates are specified in the graph attribute 'area' (in
+  the file header). The value of this attribute is of the form
+  'car:x,y,width,height:reflat,reflon', where (x,y) and
+  (reflat,reflon) are the cartesian and geographical coordinates of
+  the reference location point, and (width,height) determine
+  the size of the area.
+
+- each bus is identified as line-xx-yy, where xx is a bus line number
+  (there are 11 bus lines), and yy is the bus number in that line

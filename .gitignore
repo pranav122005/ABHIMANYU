@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+
+# C++ Build artifacts
+*.exe
+*.o
+*.obj
+*.elf
+*.bin
+
+# PlatformIO
+.pio/
+.vscode/

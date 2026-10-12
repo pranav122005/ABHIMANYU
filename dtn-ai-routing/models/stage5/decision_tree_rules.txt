@@ -1,0 +1,37 @@
+|--- remaining_ttl_ratio <= 0.71
+|   |--- peer_is_destination <= 0.50
+|   |   |--- local_buffer_utilization <= 0.02
+|   |   |   |--- peer_encounter_frequency <= 1.50
+|   |   |   |   |--- class: 0
+|   |   |   |--- peer_encounter_frequency >  1.50
+|   |   |   |   |--- class: 0
+|   |   |--- local_buffer_utilization >  0.02
+|   |   |   |--- remaining_ttl_ratio <= 0.71
+|   |   |   |   |--- class: 0
+|   |   |   |--- remaining_ttl_ratio >  0.71
+|   |   |   |   |--- class: 0
+|   |--- peer_is_destination >  0.50
+|   |   |--- class: 1
+|--- remaining_ttl_ratio >  0.71
+|   |--- remaining_ttl_ratio <= 1.03
+|   |   |--- remaining_ttl_ratio <= 0.87
+|   |   |   |--- peer_is_destination <= 0.50
+|   |   |   |   |--- class: 0
+|   |   |   |--- peer_is_destination >  0.50
+|   |   |   |   |--- class: 1
+|   |   |--- remaining_ttl_ratio >  0.87
+|   |   |   |--- remaining_ttl_ratio <= 0.94
+|   |   |   |   |--- class: 1
+|   |   |   |--- remaining_ttl_ratio >  0.94
+|   |   |   |   |--- class: 1
+|   |--- remaining_ttl_ratio >  1.03
+|   |   |--- peer_is_destination <= 0.50
+|   |   |   |--- remaining_ttl_ratio <= 1.06
+|   |   |   |   |--- class: 0
+|   |   |   |--- remaining_ttl_ratio >  1.06
+|   |   |   |   |--- class: 0
+|   |   |--- peer_is_destination >  0.50
+|   |   |   |--- local_buffer_utilization <= 0.02
+|   |   |   |   |--- class: 1
+|   |   |   |--- local_buffer_utilization >  0.02
+|   |   |   |   |--- class: 1

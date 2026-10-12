@@ -1,0 +1,4 @@
+dataset,file_name,format,file_size_bytes,rows,columns,missing_values_count,missing_percentage,duplicate_rows_count,duplicate_percentage,candidate_node_ids,timestamp_format,quality_assessment
+Vannes_Bus,vbn_0.dgs,DGS (Dynamic Graph Stream),64820183,1964512,"Event-driven graph format (cmd, id, attr=val)",0,0.0,0,0.0,bus_id (line-xx-yy),"Relative step ms (0-51240000 ms, 14h14m)","Excellent. 1.9M continuous trajectory events, zero dropped lines."
+Haggle_Cambridge,54 *.dat trace files,Space-separated contact tuples,1098305,41587,3,0,0.0,5,0.012,"observer_mote_id, seen_device_id","Unix timestamp in seconds (UTC, 2005)",Valid contact logs. Duplicates reflect repeated sightings within skip-sequence window.
+Salzburg_LTE,SRFG-v1.csv,CSV,46993726,267198,22,422931,7.19,0,0.0,"trip, cell_id, pci, line",ISO UTC datetime (YYYY-MM-DD HH:MM:SS),High fidelity highway LTE logs. Missing RSSI/RSRP expected during cell handovers.

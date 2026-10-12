@@ -1,0 +1,7 @@
+dataset_id,range_m,routing_policy,num_nodes,total_contacts,total_generated,total_delivered,pending_in_buffers,expired_undelivered,total_expired_copies,buffer_dropped_packets,packet_delivery_ratio,mean_delay_ms,median_delay_ms,min_delay_ms,max_delay_ms,std_delay_ms,mean_hops,forwarding_attempts,successful_transfers,failed_transfers,truncated_contact_attempts,peak_buffer_bytes_network,mean_buffer_utilization
+vannes,50.0,epidemic,59,7275,200,178,1,21,9920,0,0.89,2610082.7,1625298.5,101986,14186957,2887744.3,3.28,10066,10061,5,5,800000,0.0138
+vannes,50.0,direct_delivery,59,7275,200,89,3,108,197,0,0.445,5516436.3,4025125.0,101986,14109798,4333857.7,1.0,89,89,0,0,50000,0.0003
+vannes,100.0,epidemic,59,8036,200,178,1,21,9878,0,0.89,2475744.5,1443561.5,43661,14185757,2935000.0,3.17,10075,10073,2,2,810000,0.0184
+vannes,100.0,direct_delivery,59,8036,200,101,3,96,196,0,0.505,5393529.7,4022125.0,92986,14105798,4212941.5,1.0,101,101,0,0,50000,0.0003
+vannes,200.0,epidemic,59,8892,200,178,0,22,10104,0,0.89,2376444.1,1348188.0,33481,14180757,2904838.6,3.24,10082,10082,0,0,810000,0.0
+vannes,200.0,direct_delivery,59,8892,200,106,0,94,200,0,0.53,4998467.1,3587663.5,55763,14086063,3976263.9,1.0,106,106,0,0,50000,0.0
