@@ -584,10 +584,30 @@ class DecisionTreeRouter(BaseRouter):
             if pkt.is_expired(current_time_ms):
                 continue
             if pkt.packet_id in peer_seen_packet_ids:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "decision_tree",
+                        "reason": "Peer already received/holds packet",
+                    })
                 continue
 
             # Direct delivery is always prioritary
             if pkt.destination == peer_id:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "decision_tree",
+                        "reason": "Direct destination encounter prioritized",
+                    })
                 candidates.append(pkt)
                 continue
 
@@ -615,7 +635,28 @@ class DecisionTreeRouter(BaseRouter):
             pred = self.model.predict(X)[0]
 
             if pred == 1:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "decision_tree",
+                        "reason": f"Decision Tree approved relay (pred=1, TTL ratio={round(ttl_ratio, 3)})",
+                    })
                 candidates.append(pkt)
+            else:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "decision_tree",
+                        "reason": f"Decision Tree rejected relay (pred=0, TTL ratio={round(ttl_ratio, 3)})",
+                    })
 
         # Prioritize destination deliveries first, then higher priority, then FIFO
         candidates.sort(key=lambda p: (-(p.destination == peer_id), -p.priority, p.creation_time_ms))
@@ -676,9 +717,29 @@ class LogisticRegressionRouter(BaseRouter):
             if pkt.is_expired(current_time_ms):
                 continue
             if pkt.packet_id in peer_seen_packet_ids:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "logistic_regression",
+                        "reason": "Peer already received/holds packet",
+                    })
                 continue
 
             if pkt.destination == peer_id:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "logistic_regression",
+                        "reason": "Direct destination encounter prioritized",
+                    })
                 candidates.append(pkt)
                 continue
 
@@ -706,7 +767,28 @@ class LogisticRegressionRouter(BaseRouter):
             pred = self.model.predict(X_scaled)[0]
 
             if pred == 1:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "logistic_regression",
+                        "reason": f"Logistic Regression approved relay (pred=1, TTL ratio={round(ttl_ratio, 3)})",
+                    })
                 candidates.append(pkt)
+            else:
+                if getattr(self, "decision_log", None) is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "logistic_regression",
+                        "reason": f"Logistic Regression rejected relay (pred=0, TTL ratio={round(ttl_ratio, 3)})",
+                    })
 
         candidates.sort(key=lambda p: (-(p.destination == peer_id), -p.priority, p.creation_time_ms))
         return candidates

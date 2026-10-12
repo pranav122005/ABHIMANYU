@@ -42,6 +42,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 # -----------------------------------------------------------------------------
 # 1. Packet & Event Data Models
@@ -210,6 +212,7 @@ class BaseRouter:
 
     def __init__(self, node_id: str):
         self.node_id = node_id
+        self.decision_log: Optional[List[Dict[str, Any]]] = None
 
     def select_packets_to_forward(
         self,
@@ -256,7 +259,28 @@ class EpidemicRouter(BaseRouter):
                 continue
             # 2. Duplicate suppression: skip packets peer already has or has seen
             if pkt.packet_id in peer_seen_packet_ids:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "epidemic",
+                        "reason": "Peer already holds/saw packet (duplicate suppression)",
+                    })
                 continue
+
+            if self.decision_log is not None:
+                self.decision_log.append({
+                    "time_ms": current_time_ms,
+                    "node_id": self.node_id,
+                    "peer_id": peer_id,
+                    "packet_id": pkt.packet_id,
+                    "decision": "FORWARD",
+                    "policy": "epidemic",
+                    "reason": "Peer does not hold packet (epidemic replication)",
+                })
             candidates.append(pkt)
 
         # Prioritization sorting key
@@ -293,10 +317,41 @@ class DirectDeliveryRouter(BaseRouter):
             if pkt.is_expired(current_time_ms):
                 continue
             if pkt.packet_id in peer_seen_packet_ids:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "direct_delivery",
+                        "reason": "Peer already received/holds packet",
+                    })
                 continue
             # Only send if peer IS the final destination
             if pkt.destination == peer_id:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "direct_delivery",
+                        "reason": "Peer is final destination (direct delivery match)",
+                    })
                 candidates.append(pkt)
+            else:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "direct_delivery",
+                        "reason": "Peer is not final destination (Direct Delivery policy)",
+                    })
 
         candidates.sort(key=lambda p: (-p.priority, p.creation_time_ms))
         return candidates
@@ -321,15 +376,56 @@ class TwoHopRelayRouter(BaseRouter):
             if pkt.is_expired(current_time_ms):
                 continue
             if pkt.packet_id in peer_seen_packet_ids:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "two_hop",
+                        "reason": "Peer already received/holds packet",
+                    })
                 continue
 
             if pkt.destination == peer_id:
                 # Direct delivery to destination is always allowed
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "two_hop",
+                        "reason": "Peer is final destination",
+                    })
                 candidates.append(pkt)
             elif pkt.source == self.node_id:
                 # Source is allowed to replicate to 1-hop relays
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "FORWARD",
+                        "policy": "two_hop",
+                        "reason": "Source allowed to replicate to 1-hop relay",
+                    })
                 candidates.append(pkt)
-            # Relays cannot forward to another relay (hops > 0 and destination != peer)
+            else:
+                # Relays cannot forward to another relay (hops > 0 and destination != peer)
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "two_hop",
+                        "reason": "Relay node cannot forward to another relay (two-hop limit)",
+                    })
 
         candidates.sort(key=lambda p: (-(p.destination == peer_id), -p.priority, p.creation_time_ms))
         return candidates
@@ -364,22 +460,73 @@ class TemporalAStarRouter(BaseRouter):
             if pkt.is_expired(current_time_ms):
                 continue
             if pkt.packet_id in peer_seen_packet_ids:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "temporal_astar",
+                        "reason": "Peer already received/holds packet",
+                    })
                 continue
 
             route = self.planned_routes.get(pkt.packet_id)
             if not route or not getattr(route, "success", False):
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "temporal_astar",
+                        "reason": "No feasible temporal route found for packet within TTL",
+                    })
                 continue
 
             path_nodes = getattr(route, "path_nodes", [])
             try:
                 curr_idx = path_nodes.index(self.node_id)
             except ValueError:
+                if self.decision_log is not None:
+                    self.decision_log.append({
+                        "time_ms": current_time_ms,
+                        "node_id": self.node_id,
+                        "peer_id": peer_id,
+                        "packet_id": pkt.packet_id,
+                        "decision": "HOLD",
+                        "policy": "temporal_astar",
+                        "reason": "Current node is not on planned A* path",
+                    })
                 continue
 
             if curr_idx + 1 < len(path_nodes):
                 next_hop = path_nodes[curr_idx + 1]
                 if next_hop == peer_id:
+                    if self.decision_log is not None:
+                        self.decision_log.append({
+                            "time_ms": current_time_ms,
+                            "node_id": self.node_id,
+                            "peer_id": peer_id,
+                            "packet_id": pkt.packet_id,
+                            "decision": "FORWARD",
+                            "policy": "temporal_astar",
+                            "reason": f"Peer matches planned A* next hop ({peer_id})",
+                        })
                     candidates.append(pkt)
+                else:
+                    if self.decision_log is not None:
+                        self.decision_log.append({
+                            "time_ms": current_time_ms,
+                            "node_id": self.node_id,
+                            "peer_id": peer_id,
+                            "packet_id": pkt.packet_id,
+                            "decision": "HOLD",
+                            "policy": "temporal_astar",
+                            "reason": f"Peer is not planned next hop on A* route (expected {next_hop})",
+                        })
 
         candidates.sort(key=lambda p: (-(p.destination == peer_id), -p.priority, p.creation_time_ms))
         return candidates
@@ -610,6 +757,7 @@ class DTNSimulator:
         model: Optional[Any] = None,
         scaler: Optional[Any] = None,
         seed: int = 42,
+        record_decisions: bool = False,
     ):
         self.contact_csv_path = Path(contact_csv_path)
         self.range_m = float(range_m)
@@ -624,6 +772,29 @@ class DTNSimulator:
         self.model = model
         self.scaler = scaler
         self.seed = seed
+        self.record_decisions = record_decisions
+
+        # Auto-load trained model artifacts if not explicitly passed
+        if self.model is None and self.routing_policy_name == "decision_tree":
+            dt_path = PROJECT_ROOT / "models" / "stage5" / "decision_tree_model.joblib"
+            if dt_path.exists():
+                try:
+                    import joblib
+                    self.model = joblib.load(dt_path)
+                except Exception as e:
+                    logger.warning("Could not auto-load decision tree model: %s", e)
+        if (self.model is None or self.scaler is None) and self.routing_policy_name == "logistic_regression":
+            lr_path = PROJECT_ROOT / "models" / "stage5" / "logistic_regression_model.joblib"
+            sc_path = PROJECT_ROOT / "models" / "stage5" / "feature_scaler.joblib"
+            if lr_path.exists() and sc_path.exists():
+                try:
+                    import joblib
+                    if self.model is None:
+                        self.model = joblib.load(lr_path)
+                    if self.scaler is None:
+                        self.scaler = joblib.load(sc_path)
+                except Exception as e:
+                    logger.warning("Could not auto-load logistic regression model: %s", e)
 
         # Simulation State
         self.nodes: Dict[str, DTNNode] = {}
@@ -632,6 +803,7 @@ class DTNSimulator:
         self.all_generated_packets: Dict[str, Packet] = {}
         self.planned_routes: Dict[str, Any] = {}
         self.forwarding_event_log: List[Dict[str, Any]] = []
+        self.decision_log: List[Dict[str, Any]] = []
 
         # Metrics accumulator
         self.metrics = SimulationMetrics(
@@ -699,6 +871,8 @@ class DTNSimulator:
                 node.router.model = self.model
             if hasattr(node.router, "scaler") and self.scaler is not None:
                 node.router.scaler = self.scaler
+            if self.record_decisions:
+                node.router.decision_log = self.decision_log
             self.nodes[nid] = node
 
         self.metrics.num_nodes = len(self.nodes)
@@ -783,6 +957,8 @@ class DTNSimulator:
                         node.router.model = self.model
                     if hasattr(node.router, "scaler") and self.scaler is not None:
                         node.router.scaler = self.scaler
+                    if self.record_decisions:
+                        node.router.decision_log = self.decision_log
                     self.nodes[p.source] = node
                 if p.destination not in self.nodes:
                     node = DTNNode(p.destination, self.buffer_capacity_bytes, self.router_class)
@@ -790,6 +966,8 @@ class DTNSimulator:
                         node.router.model = self.model
                     if hasattr(node.router, "scaler") and self.scaler is not None:
                         node.router.scaler = self.scaler
+                    if self.record_decisions:
+                        node.router.decision_log = self.decision_log
                     self.nodes[p.destination] = node
             self.metrics.num_nodes = len(self.nodes)
         else:
