@@ -428,3 +428,29 @@ def test_packet_remaining_ttl_bounded():
     assert pkt.remaining_ttl_ms(8000) == 0
     assert pkt.is_expired(6000) is True
     assert pkt.is_expired(5999) is False
+
+
+def test_node_buffer_membership_and_snapshot():
+    """
+    Validates that NodeBuffer supports membership checks via `in` and
+    provides an immutable/isolated snapshot list of current packets.
+    """
+    buf = NodeBuffer(capacity_bytes=5000)
+    pkt1 = Packet("pkt_1", "nodeA", "nodeB", 1000, 1, 0, 10000)
+    pkt2 = Packet("pkt_2", "nodeA", "nodeC", 2000, 1, 0, 10000)
+
+    assert "pkt_1" not in buf
+    buf.add(pkt1)
+    buf.add(pkt2)
+
+    assert "pkt_1" in buf
+    assert "pkt_2" in buf
+    assert "pkt_3" not in buf
+
+    snapshot = buf.packets_list
+    assert len(snapshot) == 2
+    assert {p.packet_id for p in snapshot} == {"pkt_1", "pkt_2"}
+
+    # Modifying the returned list does not affect the internal buffer
+    snapshot.pop()
+    assert len(buf) == 2

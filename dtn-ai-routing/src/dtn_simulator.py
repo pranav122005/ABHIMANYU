@@ -199,6 +199,14 @@ class NodeBuffer:
     def get(self, packet_id: str) -> Optional[Packet]:
         return self.packets.get(packet_id)
 
+    def __contains__(self, packet_id: str) -> bool:
+        return packet_id in self.packets
+
+    @property
+    def packets_list(self) -> List[Packet]:
+        """Returns a snapshot list of packets currently held in buffer."""
+        return list(self.packets.values())
+
     def __len__(self) -> int:
         return len(self.packets)
 
