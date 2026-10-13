@@ -586,6 +586,11 @@ class DTNNode:
         """Total payload bytes currently stored in node buffer."""
         return self.buffer.current_bytes
 
+    @property
+    def available_buffer_bytes(self) -> float:
+        """Remaining buffer headroom in bytes, or inf if unlimited."""
+        return self.buffer.available_bytes
+
     def receive_packet(self, packet: Packet, current_time_ms: int) -> Tuple[bool, str]:
         """
         Processes an incoming packet transfer.

@@ -493,6 +493,7 @@ def test_dtn_node_buffer_status_properties():
     assert node.buffer_utilization == 0.0
     assert node.stored_packet_count == 0
     assert node.stored_bytes == 0
+    assert node.available_buffer_bytes == 1000.0
 
     pkt = Packet("pkt_1", "nodeA", "nodeB", size_bytes=250, priority=1, creation_time_ms=0, ttl_ms=10000)
     success, reason = node.receive_packet(pkt, current_time_ms=100)
@@ -502,4 +503,6 @@ def test_dtn_node_buffer_status_properties():
     assert node.stored_packet_count == 1
     assert node.stored_bytes == 250
     assert node.buffer_utilization == 0.25
+    assert node.available_buffer_bytes == 750.0
+
 
