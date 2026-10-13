@@ -682,6 +682,16 @@ class SimulationMetrics:
             return 0.0
         return sum(self.hop_counts) / len(self.hop_counts)
 
+    @property
+    def overhead_ratio(self) -> float:
+        """
+        DTN Overhead Ratio: (successful_transfers - total_delivered) / total_delivered
+        Returns 0.0 if total_delivered is 0.
+        """
+        if self.total_delivered == 0:
+            return 0.0
+        return max(0.0, (self.successful_transfers - self.total_delivered) / self.total_delivered)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "dataset_id": self.dataset_id,
@@ -696,6 +706,7 @@ class SimulationMetrics:
             "total_expired_copies": self.total_expired_copies,
             "buffer_dropped_packets": self.buffer_dropped_packets,
             "packet_delivery_ratio": round(self.packet_delivery_ratio, 4),
+            "overhead_ratio": round(self.overhead_ratio, 4),
             "mean_delay_ms": round(self.mean_delay_ms, 1),
             "median_delay_ms": round(self.median_delay_ms, 1),
             "min_delay_ms": self.min_delay_ms,

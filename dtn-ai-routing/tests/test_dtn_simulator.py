@@ -454,3 +454,31 @@ def test_node_buffer_membership_and_snapshot():
     # Modifying the returned list does not affect the internal buffer
     snapshot.pop()
     assert len(buf) == 2
+
+
+def test_simulation_metrics_overhead_ratio():
+    """
+    Validates that SimulationMetrics.overhead_ratio calculates the standard
+    DTN overhead ratio (transfers - deliveries) / deliveries cleanly, and
+    safely yields 0.0 when deliveries is 0.
+    """
+    m = SimulationMetrics(
+        dataset_id="vannes",
+        range_m=50.0,
+        routing_policy="epidemic",
+        num_nodes=5,
+        total_contacts=20,
+    )
+    # Zero deliveries: overhead ratio should be 0.0 safely
+    assert m.overhead_ratio == 0.0
+    assert m.to_dict()["overhead_ratio"] == 0.0
+
+    # 10 successful transfers for 2 deliveries: (10 - 2) / 2 = 4.0
+    m.total_delivered = 2
+    m.successful_transfers = 10
+    assert m.overhead_ratio == 4.0
+    assert m.to_dict()["overhead_ratio"] == 4.0
+
+    # Direct delivery: 2 successful transfers for 2 deliveries: (2 - 2) / 2 = 0.0
+    m.successful_transfers = 2
+    assert m.overhead_ratio == 0.0
