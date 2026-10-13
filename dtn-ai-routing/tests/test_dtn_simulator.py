@@ -544,5 +544,28 @@ def test_dtn_node_has_packet():
     assert not node.has_packet("pkt_beta")
 
 
+def test_dtn_node_encounter_tracking():
+    """
+    Validates DTNNode.record_encounter and get_encounter_count properly
+    record and query peer encounter history and timestamps.
+    """
+    node = DTNNode(node_id="nodeA", buffer_capacity_bytes=1000)
+    assert node.get_encounter_count("nodeB") == 0
+    assert "nodeB" not in node.last_encounter_time_ms
+
+    node.record_encounter("nodeB", encounter_time_ms=1200)
+    assert node.get_encounter_count("nodeB") == 1
+    assert node.last_encounter_time_ms["nodeB"] == 1200
+
+    node.record_encounter("nodeB", encounter_time_ms=2500)
+    assert node.get_encounter_count("nodeB") == 2
+    assert node.last_encounter_time_ms["nodeB"] == 2500
+
+    node.record_encounter("nodeC", encounter_time_ms=3000)
+    assert node.get_encounter_count("nodeC") == 1
+    assert node.get_encounter_count("nodeB") == 2
+
+
+
 
 

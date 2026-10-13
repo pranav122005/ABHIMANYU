@@ -570,6 +570,10 @@ class DTNNode:
         self.delivered_packets: Dict[str, Packet] = {}
         # Transceiver busy clock: models half-duplex / single-radio interface constraint
         self.radio_busy_until_ms: int = 0
+        # Encounter tracking for contact-aware and PRoPHET routing
+        self.encounter_counts: Dict[str, int] = {}
+        self.last_encounter_time_ms: Dict[str, int] = {}
+
 
     @property
     def buffer_utilization(self) -> float:
@@ -630,6 +634,22 @@ class DTNNode:
     def has_packet(self, packet_id: str) -> bool:
         """Checks if a packet is currently resident in the node's buffer."""
         return packet_id in self.buffer
+
+    def record_encounter(self, peer_id: str, encounter_time_ms: int) -> None:
+        """Records an encounter event with a peer node."""
+        if not hasattr(self, "encounter_counts"):
+            self.encounter_counts: Dict[str, int] = {}
+        if not hasattr(self, "last_encounter_time_ms"):
+            self.last_encounter_time_ms: Dict[str, int] = {}
+        self.encounter_counts[peer_id] = self.encounter_counts.get(peer_id, 0) + 1
+        self.last_encounter_time_ms[peer_id] = encounter_time_ms
+
+    def get_encounter_count(self, peer_id: str) -> int:
+        """Returns the total observed encounter frequency with a specific peer."""
+        if not hasattr(self, "encounter_counts"):
+            return 0
+        return self.encounter_counts.get(peer_id, 0)
+
 
 
 
