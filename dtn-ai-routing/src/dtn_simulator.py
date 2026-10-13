@@ -571,6 +571,21 @@ class DTNNode:
         # Transceiver busy clock: models half-duplex / single-radio interface constraint
         self.radio_busy_until_ms: int = 0
 
+    @property
+    def buffer_utilization(self) -> float:
+        """Current fractional utilization of node buffer [0.0, 1.0]."""
+        return self.buffer.utilization
+
+    @property
+    def stored_packet_count(self) -> int:
+        """Count of packets currently held in node buffer."""
+        return len(self.buffer)
+
+    @property
+    def stored_bytes(self) -> int:
+        """Total payload bytes currently stored in node buffer."""
+        return self.buffer.current_bytes
+
     def receive_packet(self, packet: Packet, current_time_ms: int) -> Tuple[bool, str]:
         """
         Processes an incoming packet transfer.

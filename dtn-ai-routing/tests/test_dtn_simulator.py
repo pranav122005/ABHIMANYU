@@ -482,3 +482,24 @@ def test_simulation_metrics_overhead_ratio():
     # Direct delivery: 2 successful transfers for 2 deliveries: (2 - 2) / 2 = 0.0
     m.successful_transfers = 2
     assert m.overhead_ratio == 0.0
+
+
+def test_dtn_node_buffer_status_properties():
+    """
+    Validates DTNNode buffer convenience properties: buffer_utilization,
+    stored_packet_count, and stored_bytes.
+    """
+    node = DTNNode(node_id="nodeA", buffer_capacity_bytes=1000)
+    assert node.buffer_utilization == 0.0
+    assert node.stored_packet_count == 0
+    assert node.stored_bytes == 0
+
+    pkt = Packet("pkt_1", "nodeA", "nodeB", size_bytes=250, priority=1, creation_time_ms=0, ttl_ms=10000)
+    success, reason = node.receive_packet(pkt, current_time_ms=100)
+    assert success is True
+    assert reason == "BUFFER_STORED"
+
+    assert node.stored_packet_count == 1
+    assert node.stored_bytes == 250
+    assert node.buffer_utilization == 0.25
+
