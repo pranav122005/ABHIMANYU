@@ -405,3 +405,26 @@ def test_simulation_summary_csv_and_report_artifacts():
     assert (df["packet_delivery_ratio"] >= 0.0).all()
     assert (df["packet_delivery_ratio"] <= 1.0).all()
     assert (df["total_delivered"] <= df["total_generated"]).all()
+
+
+def test_packet_remaining_ttl_bounded():
+    """
+    Validates that Packet.remaining_ttl_ms correctly reports remaining lifetime
+    and cleanly clamps to 0 once expired.
+    """
+    pkt = Packet(
+        packet_id="pkt_test_ttl",
+        source="nodeA",
+        destination="nodeB",
+        size_bytes=1000,
+        priority=1,
+        creation_time_ms=1000,
+        ttl_ms=5000,
+    )
+    assert pkt.expiry_time_ms == 6000
+    assert pkt.remaining_ttl_ms(1000) == 5000
+    assert pkt.remaining_ttl_ms(3000) == 3000
+    assert pkt.remaining_ttl_ms(6000) == 0
+    assert pkt.remaining_ttl_ms(8000) == 0
+    assert pkt.is_expired(6000) is True
+    assert pkt.is_expired(5999) is False

@@ -70,6 +70,10 @@ class Packet:
     def expiry_time_ms(self) -> int:
         return self.creation_time_ms + self.ttl_ms
 
+    def remaining_ttl_ms(self, current_time_ms: int) -> int:
+        """Returns remaining TTL in milliseconds, bounded below by 0."""
+        return max(0, self.expiry_time_ms - current_time_ms)
+
     def is_expired(self, current_time_ms: int) -> bool:
         return current_time_ms >= self.expiry_time_ms
 
