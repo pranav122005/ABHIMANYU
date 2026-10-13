@@ -623,6 +623,11 @@ class DTNNode:
             return True, "BUFFER_STORED"
         return False, "BUFFER_FULL"
 
+    def purge_expired_packets(self, current_time_ms: int) -> List[Packet]:
+        """Evicts and returns all packets currently in the node's buffer whose TTL has expired."""
+        return self.buffer.drop_expired(current_time_ms)
+
+
 
 # -----------------------------------------------------------------------------
 # 5. Simulation Metrics & Event Records

@@ -506,3 +506,29 @@ def test_dtn_node_buffer_status_properties():
     assert node.available_buffer_bytes == 750.0
 
 
+def test_dtn_node_purge_expired_packets():
+    """
+    Validates DTNNode.purge_expired_packets evicts expired packets from the node's
+    underlying buffer and returns the evicted packets.
+    """
+    node = DTNNode(node_id="nodeA", buffer_capacity_bytes=1000)
+    # pkt_alive expires at t=20000; pkt_exp expires at t=5000
+    pkt_alive = Packet("pkt_alive", "nodeA", "nodeB", size_bytes=100, priority=1, creation_time_ms=0, ttl_ms=20000)
+    pkt_exp = Packet("pkt_exp", "nodeA", "nodeB", size_bytes=200, priority=1, creation_time_ms=0, ttl_ms=5000)
+
+    node.receive_packet(pkt_alive, current_time_ms=1000)
+    node.receive_packet(pkt_exp, current_time_ms=1000)
+    assert node.stored_packet_count == 2
+    assert node.stored_bytes == 300
+
+    # Purge at t=6000 (pkt_exp expired, pkt_alive remains)
+    evicted = node.purge_expired_packets(current_time_ms=6000)
+    assert len(evicted) == 1
+    assert evicted[0].packet_id == "pkt_exp"
+    assert node.stored_packet_count == 1
+    assert node.stored_bytes == 100
+    assert "pkt_alive" in node.buffer
+    assert "pkt_exp" not in node.buffer
+
+
+
