@@ -531,4 +531,18 @@ def test_dtn_node_purge_expired_packets():
     assert "pkt_exp" not in node.buffer
 
 
+def test_dtn_node_has_packet():
+    """
+    Validates DTNNode.has_packet correctly queries buffer residency.
+    """
+    node = DTNNode(node_id="nodeA", buffer_capacity_bytes=1000)
+    assert not node.has_packet("pkt_alpha")
+
+    pkt = Packet("pkt_alpha", "nodeA", "nodeB", size_bytes=150, priority=1, creation_time_ms=0, ttl_ms=10000)
+    node.receive_packet(pkt, current_time_ms=500)
+    assert node.has_packet("pkt_alpha")
+    assert not node.has_packet("pkt_beta")
+
+
+
 

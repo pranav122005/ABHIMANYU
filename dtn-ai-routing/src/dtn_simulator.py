@@ -627,6 +627,11 @@ class DTNNode:
         """Evicts and returns all packets currently in the node's buffer whose TTL has expired."""
         return self.buffer.drop_expired(current_time_ms)
 
+    def has_packet(self, packet_id: str) -> bool:
+        """Checks if a packet is currently resident in the node's buffer."""
+        return packet_id in self.buffer
+
+
 
 
 # -----------------------------------------------------------------------------
