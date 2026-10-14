@@ -17,7 +17,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-DB_PATH_DEFAULT = Path(__file__).resolve().parent.parent.parent / "data" / "demo_system.db"
+def get_default_db_path() -> Path:
+    """Returns database path from DTN_DB_PATH environment variable or default local path."""
+    env_path = os.environ.get("DTN_DB_PATH")
+    if env_path and env_path.strip():
+        return Path(env_path.strip())
+    return Path(__file__).resolve().parent.parent.parent / "data" / "demo_system.db"
 
 
 def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
@@ -34,7 +39,7 @@ def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
 
 
 def verify_password(password: str, salt: str, expected_hash: str) -> bool:
-    """Verifies password against stored salt and hash."""
+    """Verifies password against stored salt and hash using constant-time comparison."""
     computed_hash, _ = hash_password(password, salt)
     return secrets.compare_digest(computed_hash, expected_hash)
 
@@ -43,7 +48,7 @@ class DemoDatabase:
     """Thread-safe SQLite storage for the shared DTN demonstration."""
 
     def __init__(self, db_path: Optional[Path] = None):
-        self.db_path = db_path or DB_PATH_DEFAULT
+        self.db_path = Path(db_path) if db_path else get_default_db_path()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_schema()
@@ -70,7 +75,7 @@ class DemoDatabase:
                     display_name TEXT NOT NULL,
                     password_hash TEXT NOT NULL,
                     password_salt TEXT NOT NULL,
-                    demo_password_plain TEXT NOT NULL,
+                    demo_password_plain TEXT, -- NULL in production; preserved in local dev
                     status TEXT NOT NULL DEFAULT 'online', -- online, offline, unavailable
                     buffer_capacity_bytes INTEGER NOT NULL DEFAULT 2000000,
                     created_at TEXT NOT NULL,
@@ -150,6 +155,7 @@ class DemoDatabase:
         if cur.fetchone()["count"] >= 10:
             return
 
+        is_production = os.environ.get("DTN_ENV", "").lower() == "production"
         now_utc = datetime.now(timezone.utc).isoformat()
         default_nodes = [
             ("node-01", "Alpha Gateway", "pass-node-01"),
@@ -166,14 +172,22 @@ class DemoDatabase:
 
         with conn:
             for node_id, display_name, plain_pwd in default_nodes:
-                p_hash, p_salt = hash_password(plain_pwd)
+                if is_production:
+                    # In production, do not seed predictable passwords or store plaintext
+                    rand_pass = secrets.token_urlsafe(32)
+                    p_hash, p_salt = hash_password(rand_pass)
+                    stored_plain = None
+                else:
+                    p_hash, p_salt = hash_password(plain_pwd)
+                    stored_plain = plain_pwd
+
                 conn.execute("""
                     INSERT OR IGNORE INTO demo_nodes (
                         node_id, display_name, password_hash, password_salt,
                         demo_password_plain, status, buffer_capacity_bytes,
                         created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, 'online', 2000000, ?, ?)
-                """, (node_id, display_name, p_hash, p_salt, plain_pwd, now_utc, now_utc))
+                """, (node_id, display_name, p_hash, p_salt, stored_plain, now_utc, now_utc))
 
             # Initialize initial mesh contacts in a ring + cross topology
             node_ids = [n[0] for n in default_nodes]
@@ -193,7 +207,17 @@ class DemoDatabase:
                     VALUES (?, ?, 1, 50.0, ?)
                 """, (a2, b2, now_utc))
 
+    def _get_node_internal(self, node_id: str) -> Optional[Dict[str, Any]]:
+        """Internal helper returning raw database row including password hashes."""
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM demo_nodes WHERE node_id = ?", (node_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
     def get_all_nodes(self, include_plain_passwords: bool = False) -> List[Dict[str, Any]]:
+        """Returns public node listings. In production, credentials are never returned."""
+        is_production = os.environ.get("DTN_ENV", "").lower() == "production"
         conn = self._get_connection()
         cur = conn.cursor()
         cur.execute("SELECT * FROM demo_nodes ORDER BY node_id ASC")
@@ -201,14 +225,16 @@ class DemoDatabase:
         result = []
         for r in rows:
             d = dict(r)
-            if not include_plain_passwords:
-                d.pop("password_hash", None)
-                d.pop("password_salt", None)
+            d.pop("password_hash", None)
+            d.pop("password_salt", None)
+            if is_production or not include_plain_passwords:
                 d.pop("demo_password_plain", None)
             result.append(d)
         return result
 
     def get_node(self, node_id: str, include_auth: bool = False) -> Optional[Dict[str, Any]]:
+        """Returns single node info. Never returns password hashes."""
+        is_production = os.environ.get("DTN_ENV", "").lower() == "production"
         conn = self._get_connection()
         cur = conn.cursor()
         cur.execute("SELECT * FROM demo_nodes WHERE node_id = ?", (node_id,))
@@ -216,9 +242,9 @@ class DemoDatabase:
         if not row:
             return None
         d = dict(row)
-        if not include_auth:
-            d.pop("password_hash", None)
-            d.pop("password_salt", None)
+        d.pop("password_hash", None)
+        d.pop("password_salt", None)
+        if is_production or not include_auth:
             d.pop("demo_password_plain", None)
         return d
 
@@ -231,19 +257,20 @@ class DemoDatabase:
     ) -> Optional[Dict[str, Any]]:
         conn = self._get_connection()
         now_utc = datetime.now(timezone.utc).isoformat()
-        node = self.get_node(node_id, include_auth=True)
+        is_production = os.environ.get("DTN_ENV", "").lower() == "production"
+        node = self._get_node_internal(node_id)
         if not node:
             return None
 
         new_name = display_name if display_name is not None else node["display_name"]
         new_status = status if status is not None else node["status"]
         if demo_password_plain is not None and demo_password_plain.strip():
-            p_hash, p_salt = hash_password(demo_password_plain)
-            p_plain = demo_password_plain
+            p_hash, p_salt = hash_password(demo_password_plain.strip())
+            p_plain = None if is_production else demo_password_plain.strip()
         else:
             p_hash = node["password_hash"]
             p_salt = node["password_salt"]
-            p_plain = node["demo_password_plain"]
+            p_plain = node["demo_password_plain"] if not is_production else None
 
         with conn:
             conn.execute("""
@@ -256,7 +283,7 @@ class DemoDatabase:
         return self.get_node(node_id)
 
     def authenticate_node(self, node_id: str, password: str) -> Optional[str]:
-        node = self.get_node(node_id, include_auth=True)
+        node = self._get_node_internal(node_id)
         if not node:
             return None
         if not verify_password(password, node["password_salt"], node["password_hash"]):
