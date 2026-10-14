@@ -36,12 +36,16 @@
 #include "../firmware/esp8266_node/include/event_logger.h"
 #include "../firmware/esp8266_node/include/node_app.h"
 #include "../firmware/esp8266_node/include/self_test.h"
+#include "../firmware/esp8266_node/include/esp_now_transport.h"
+#include "../firmware/esp8266_node/include/oled_display.h"
 
 // Include firmware source implementations directly for host test linking
 #include "../firmware/esp8266_node/src/packet.cpp"
 #include "../firmware/esp8266_node/src/packet_buffer.cpp"
 #include "../firmware/esp8266_node/src/condition_report.cpp"
 #include "../firmware/esp8266_node/src/node_app.cpp"
+#include "../firmware/esp8266_node/src/esp_now_transport.cpp"
+#include "../firmware/esp8266_node/src/oled_display.cpp"
 
 static int g_tests_run = 0;
 static int g_tests_passed = 0;
@@ -980,6 +984,204 @@ bool test_scenario_12_timer_rollover_lifecycle() {
 }
 
 // ============================================================================
+// Test 13: ESP-NOW Frame Bounding & Wire Validation
+// ============================================================================
+bool test_esp_now_frame_size_and_truncation_safety() {
+    EspNowTransport transport;
+    TEST_ASSERT(transport.init(), "EspNowTransport init failed");
+
+    // 1. Packet within 250-byte single-frame limit (wire = 78 + 100 = 178 bytes)
+    uint8_t payload[100];
+    memset(payload, 'A', sizeof(payload));
+    Packet valid_pkt = Packet::create("pkt_valid_100", "nodeA", "nodeB", 100, 1, 1000, 5000, payload, 100);
+    bool send_ok = transport.send_packet("nodeB", valid_pkt);
+    TEST_ASSERT(send_ok, "Packet <= 250 bytes must be accepted by ESP-NOW transport");
+
+    // 2. Packet exceeding 250-byte single-frame limit (wire = 78 + 200 = 278 bytes)
+    uint8_t oversized[200];
+    memset(oversized, 'B', sizeof(oversized));
+    Packet over_pkt = Packet::create("pkt_over_200", "nodeA", "nodeB", 200, 1, 1000, 5000, oversized, 200);
+    bool over_ok = transport.send_packet("nodeB", over_pkt);
+    TEST_ASSERT(!over_ok, "Packet > 250 bytes must be rejected by ESP-NOW transport");
+
+    // 3. Injected frame < 78 bytes minimum header must be rejected
+    uint8_t truncated[40] = {0};
+    uint8_t mock_mac[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    transport.mock_inject_rx(mock_mac, truncated, sizeof(truncated));
+    char src[NODE_ID_MAX_LEN];
+    Packet rx_pkt;
+    TEST_ASSERT(!transport.receive_packet(src, rx_pkt), "Truncated frame (< 78B) must not be received");
+
+    return true;
+}
+
+// ============================================================================
+// Test 14: 2-Node Bidirectional Communication & Automatic DTN-level ACK
+// ============================================================================
+bool test_2node_bidirectional_espnow_exchange_and_ack() {
+    // Setup Node A
+    NodeConfig cfg_a = NodeConfig::create_default("node_a");
+    PacketBuffer buf_a(16, 4096);
+    DecisionTreeRouter router_a;
+    EspNowTransport transport_a;
+    NullDisplay disp_a;
+    RamStorage stor_a;
+    ReportQueue rq_a;
+    EventLogger log_a;
+    NodeApp app_a(cfg_a, buf_a, router_a, transport_a, disp_a, stor_a, rq_a, log_a);
+    TEST_ASSERT(app_a.init(), "Node A init failed");
+
+    // Setup Node B
+    NodeConfig cfg_b = NodeConfig::create_default("node_b");
+    PacketBuffer buf_b(16, 4096);
+    DecisionTreeRouter router_b;
+    EspNowTransport transport_b;
+    NullDisplay disp_b;
+    RamStorage stor_b;
+    ReportQueue rq_b;
+    EventLogger log_b;
+    NodeApp app_b(cfg_b, buf_b, router_b, transport_b, disp_b, stor_b, rq_b, log_b);
+    TEST_ASSERT(app_b.init(), "Node B init failed");
+
+    // Establish mutual contact awareness
+    transport_a.mock_set_peer_in_range(true);
+    transport_b.mock_set_peer_in_range(true);
+    app_a.notify_peer_contact("node_b", true, 1000);
+    app_b.notify_peer_contact("node_a", true, 1000);
+
+    // Node A generates packet for Node B
+    const char msg_text[] = "Hello Node B from Node A";
+    BufferOutcome gen_res = app_a.generate_packet(
+        "msg_AB_001", "node_b", sizeof(msg_text), 1, 10000, 1000,
+        reinterpret_cast<const uint8_t*>(msg_text), strlen(msg_text)
+    );
+    TEST_ASSERT(gen_res == BUFFER_ACCEPTED, "Packet generation failed");
+
+    // Node A ticks: router evaluates direct destination (forward=true) and transmits
+    app_a.tick(1000);
+    TEST_ASSERT(app_a.get_packets_delivered() == 1, "Direct destination marked delivered by sender upon ACK");
+
+    // Serialize packet as transmitted over air from Node A to Node B
+    Packet out_a = Packet::create(
+        "msg_AB_001", "node_a", "node_b", sizeof(msg_text), 1, 1000, 10000,
+        reinterpret_cast<const uint8_t*>(msg_text), strlen(msg_text)
+    );
+    uint8_t wire[250];
+    size_t wire_len = out_a.serialize(wire, sizeof(wire));
+
+    // Node B receives wire packet
+    uint8_t mac_a[6] = {0xAA, 0x00, 0x00, 0x00, 0x00, 0x01};
+    transport_b.mock_inject_rx(mac_a, wire, wire_len);
+
+    // Node B ticks: receives packet, delivers locally, dispatches DTN ACK back to Node A
+    app_b.tick(1005);
+    TEST_ASSERT(app_b.get_packets_delivered() == 1, "Node B must deliver packet locally");
+
+    return true;
+}
+
+// ============================================================================
+// Test 15: Duplicate Packet Suppression in 2-Node Topology
+// ============================================================================
+bool test_2node_duplicate_packet_suppression() {
+    NodeConfig cfg = NodeConfig::create_default("node_b");
+    PacketBuffer buf(16, 4096);
+    DecisionTreeRouter router;
+    EspNowTransport transport;
+    NullDisplay disp;
+    RamStorage stor;
+    ReportQueue rq;
+    EventLogger log;
+    NodeApp app(cfg, buf, router, transport, disp, stor, rq, log);
+    TEST_ASSERT(app.init(), "App init failed");
+
+    Packet pkt = Packet::create("dup_001", "node_a", "node_b", 50, 1, 1000, 5000);
+    uint8_t wire[250];
+    size_t wire_len = pkt.serialize(wire, sizeof(wire));
+    uint8_t mac[6] = {0xAA, 0x01, 0x02, 0x03, 0x04, 0x05};
+
+    // First delivery
+    transport.mock_inject_rx(mac, wire, wire_len);
+    app.tick(1000);
+    TEST_ASSERT(app.get_packets_delivered() == 1, "First packet must be delivered locally");
+
+    // Second delivery of identical packet ID
+    transport.mock_inject_rx(mac, wire, wire_len);
+    app.tick(1050);
+    TEST_ASSERT(app.get_packets_delivered() == 1, "Duplicate packet must be suppressed (count remains 1)");
+
+    return true;
+}
+
+// ============================================================================
+// Test 16: AI Decision Tree Routing in 2-Node Relay Scenario
+// ============================================================================
+bool test_2node_ai_relay_decision_behavior() {
+    DecisionTreeRouter router;
+    EncounterContext ctx;
+    dtn_safe_strcpy(ctx.peer_id, "node_b", NODE_ID_MAX_LEN);
+    ctx.current_time_ms = 1000;
+    ctx.contact_start_ms = 900;
+    ctx.avg_historical_contact_ms = 8000;
+    ctx.peer_encounter_count = 5;
+    ctx.buffer_utilization = 0.05f;
+    ctx.transfer_rate_bytes_sec = 250000.0f;
+    ctx.transfer_overhead_ms = 50;
+
+    // 1. Direct packet: destination is Node B (peer_is_destination = 1) -> Always Forward
+    Packet direct_pkt = Packet::create("pkt_dir", "node_a", "node_b", 64, 1, 1000, 10000);
+    TEST_ASSERT(router.should_forward(direct_pkt, ctx) == true, "Direct packet must be forwarded immediately");
+
+    // 2. Relay packet: destination is distant "node_c", TTL fresh (remaining ratio = 0.95)
+    // AI Decision Tree evaluates: remaining_ttl_ratio > 0.87105 -> FORWARD
+    Packet relay_fresh = Packet::create("pkt_relay_fresh", "node_a", "node_c", 64, 2, 950, 1000);
+    TEST_ASSERT(router.should_forward(relay_fresh, ctx) == true, "AI Decision Tree should forward fresh relay packet");
+
+    // 3. Relay packet: destination is distant "node_c", TTL decayed (remaining ratio = 0.40)
+    // AI Decision Tree evaluates: remaining_ttl_ratio <= 0.71045 -> HOLD (do not waste buffer on stale relay)
+    Packet relay_stale = Packet::create("pkt_relay_stale", "node_a", "node_c", 64, 1, 0, 1000);
+    ctx.current_time_ms = 600; // at t=600, rem = 400ms, ratio = 0.40
+    TEST_ASSERT(router.should_forward(relay_stale, ctx) == false, "AI Decision Tree should HOLD stale relay packet");
+
+    return true;
+}
+
+// ============================================================================
+// Test 17: OLED Display Driver Line Formatting & Graceful Status Readout
+// ============================================================================
+bool test_oled_display_formatting_and_status_update() {
+    OledDisplay oled;
+    TEST_ASSERT(oled.init(), "OledDisplay init failed");
+    TEST_ASSERT(strcmp(oled.get_display_name(), "SSD1306 OLED (128x64 I2C D1/D2)") == 0 ||
+                strcmp(oled.get_display_name(), "SSD1306 (Not Detected / Headless)") == 0,
+                "Display name unexpected");
+
+    NodeStatus status;
+    memset(&status, 0, sizeof(status));
+    dtn_safe_strcpy(status.node_id, "node_a", NODE_ID_MAX_LEN);
+    status.buffer_packet_count = 2;
+    status.buffer_capacity = 16;
+    status.buffer_utilization = 0.125f;
+    status.link_status = LINK_IDLE;
+    dtn_safe_strcpy(status.last_tx_id, "msg_001", PACKET_ID_MAX_LEN);
+    dtn_safe_strcpy(status.last_tx_status, "ACK", sizeof(status.last_tx_status));
+    dtn_safe_strcpy(status.last_rx_id, "msg_B_01", PACKET_ID_MAX_LEN);
+    dtn_safe_strcpy(status.last_rx_payload, "Hello from B", sizeof(status.last_rx_payload));
+    dtn_safe_strcpy(status.ai_decision_str, "FWD", sizeof(status.ai_decision_str));
+
+    oled.update_status(status);
+
+    // Verify formatted line buffers
+    TEST_ASSERT(strstr(oled.get_line_buffer(0), "node_a") != nullptr, "Line 0 must contain node ID");
+    TEST_ASSERT(strstr(oled.get_line_buffer(1), "msg_001") != nullptr, "Line 1 must contain last Tx ID");
+    TEST_ASSERT(strstr(oled.get_line_buffer(2), "Hello from B") != nullptr, "Line 2 must contain last Rx payload");
+    TEST_ASSERT(strstr(oled.get_line_buffer(3), "Buf:2/16") != nullptr, "Line 3 must contain buffer status");
+    TEST_ASSERT(strstr(oled.get_line_buffer(3), "FWD") != nullptr, "Line 3 must contain AI decision");
+
+    return true;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 int main() {
@@ -1011,6 +1213,13 @@ int main() {
     RUN_TEST(test_scenario_10_concurrent_transmission_protection);
     RUN_TEST(test_scenario_11_missing_acknowledgement_handling);
     RUN_TEST(test_scenario_12_timer_rollover_lifecycle);
+
+    // Hardware-Phase Tests (ESP-NOW, 2-Node, Duplicates, AI, OLED)
+    RUN_TEST(test_esp_now_frame_size_and_truncation_safety);
+    RUN_TEST(test_2node_bidirectional_espnow_exchange_and_ack);
+    RUN_TEST(test_2node_duplicate_packet_suppression);
+    RUN_TEST(test_2node_ai_relay_decision_behavior);
+    RUN_TEST(test_oled_display_formatting_and_status_update);
 
     std::cout << "==============================================================" << std::endl;
     std::cout << " Results: " << g_tests_passed << " / " << g_tests_run << " passed." << std::endl;

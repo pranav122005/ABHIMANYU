@@ -124,6 +124,14 @@ private:
     // Historical encounter tracking
     PeerHistoryRecord peer_history_[MAX_TRACKED_PEERS];
     size_t peer_count_;
+
+    // Latest operational telemetry for display and logs
+    char last_tx_id_[PACKET_ID_MAX_LEN];
+    char last_tx_status_[16];
+    char last_rx_id_[PACKET_ID_MAX_LEN];
+    char last_rx_payload_[32];
+    char last_rx_sender_[NODE_ID_MAX_LEN];
+    char last_ai_decision_[16];
 };
 
 #endif // NODE_APP_H

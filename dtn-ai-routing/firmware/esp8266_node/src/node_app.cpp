@@ -5,6 +5,11 @@
 
 #include "node_app.h"
 #include <string.h>
+#include <stdio.h>
+
+#ifdef ARDUINO
+#include <Arduino.h>
+#endif
 
 NodeApp::NodeApp(
     const NodeConfig& config,
@@ -38,6 +43,12 @@ NodeApp::NodeApp(
       peer_count_(0)
 {
     memset(peer_history_, 0, sizeof(peer_history_));
+    memset(last_tx_id_, 0, sizeof(last_tx_id_));
+    memset(last_tx_status_, 0, sizeof(last_tx_status_));
+    memset(last_rx_id_, 0, sizeof(last_rx_id_));
+    memset(last_rx_payload_, 0, sizeof(last_rx_payload_));
+    memset(last_rx_sender_, 0, sizeof(last_rx_sender_));
+    memset(last_ai_decision_, 0, sizeof(last_ai_decision_));
 }
 
 bool NodeApp::init() {
@@ -134,12 +145,57 @@ void NodeApp::step_receive_packets(uint32_t current_time_ms) {
         if (strcmp(in_pkt.header.destination, config_.node_id) == 0) {
             // Check duplicate suppression filter to prevent repeated destination delivery
             if (buffer_.is_seen(in_pkt.header.packet_id)) {
+#ifdef ARDUINO
+                Serial.printf("[DTN-RX] Duplicate suppressed: %s\n", in_pkt.header.packet_id);
+#endif
                 continue;
             }
             in_pkt.state = STATE_DELIVERED;
             packets_delivered_++;
             buffer_.mark_seen(in_pkt.header.packet_id);
             logger_.log(current_time_ms, EVT_PACKET_DELIVERED, in_pkt.header.packet_id);
+
+            // Record telemetry for display and diagnostics
+            dtn_safe_strcpy(last_rx_id_, in_pkt.header.packet_id, PACKET_ID_MAX_LEN);
+            dtn_safe_strcpy(last_rx_sender_, in_pkt.header.source, NODE_ID_MAX_LEN);
+            size_t copy_len = (in_pkt.payload_len < 31) ? in_pkt.payload_len : 31;
+            if (copy_len > 0) {
+                memcpy(last_rx_payload_, in_pkt.payload, copy_len);
+            }
+            last_rx_payload_[copy_len] = '\0';
+
+#ifdef ARDUINO
+            Serial.printf("[DTN-RX] Delivered locally: ID='%s' from='%s' payload='%.31s' (hops=%u)\n",
+                in_pkt.header.packet_id, in_pkt.header.source, last_rx_payload_, in_pkt.header.hops);
+#endif
+
+            // Check if this was an incoming ACK confirmation packet
+            if (strncmp(in_pkt.header.packet_id, "ack_", 4) == 0) {
+                dtn_safe_strcpy(last_tx_status_, "ACKED", sizeof(last_tx_status_));
+#ifdef ARDUINO
+                Serial.printf("[DTN-ACK] Positive delivery acknowledgement received for packet %s\n", in_pkt.header.packet_id + 4);
+#endif
+            } else if (strlen(in_pkt.header.source) > 0) {
+                // If this is a data packet, send a DTN-level ACK packet back to sender
+                char ack_id[PACKET_ID_MAX_LEN];
+                snprintf(ack_id, sizeof(ack_id), "ack_%.27s", in_pkt.header.packet_id);
+                const char ack_payload[] = "DELIVERED";
+                Packet ack_pkt = Packet::create(
+                    ack_id,
+                    config_.node_id,
+                    in_pkt.header.source,
+                    sizeof(ack_payload),
+                    3, // Urgent priority
+                    current_time_ms,
+                    300000, // 5 min TTL
+                    reinterpret_cast<const uint8_t*>(ack_payload),
+                    static_cast<uint16_t>(strlen(ack_payload))
+                );
+                transport_.send_packet(in_pkt.header.source, ack_pkt);
+#ifdef ARDUINO
+                Serial.printf("[DTN-ACK] Dispatched delivery acknowledgement '%s' to '%s'\n", ack_id, in_pkt.header.source);
+#endif
+            }
             continue;
         }
 
@@ -148,6 +204,10 @@ void NodeApp::step_receive_packets(uint32_t current_time_ms) {
         if (outcome == BUFFER_ACCEPTED) {
             packets_received_++;
             logger_.log(current_time_ms, EVT_PACKET_ACCEPTED, in_pkt.header.packet_id);
+#ifdef ARDUINO
+            Serial.printf("[DTN-RX] Stored in buffer for Store-Carry-Forward: ID='%s' to='%s'\n",
+                in_pkt.header.packet_id, in_pkt.header.destination);
+#endif
         } else if (outcome == BUFFER_REJECTED_FULL) {
             packets_dropped_++;
             logger_.log(current_time_ms, EVT_PACKET_DROPPED, in_pkt.header.packet_id);
@@ -195,12 +255,19 @@ void NodeApp::step_route_and_forward(uint32_t current_time_ms) {
             }
 
             // Ask pluggable routing engine (Stage 5.2 Decision Tree)
-            if (router_.should_forward(*pkt, ctx)) {
+            bool should_fwd = router_.should_forward(*pkt, ctx);
+            dtn_safe_strcpy(last_ai_decision_, should_fwd ? "FWD" : "HOLD", sizeof(last_ai_decision_));
+
+            if (should_fwd) {
+                dtn_safe_strcpy(last_tx_id_, pkt->header.packet_id, PACKET_ID_MAX_LEN);
+                dtn_safe_strcpy(last_tx_status_, "SENDING", sizeof(last_tx_status_));
+
                 // Initiation of transmission
                 pkt->state = STATE_TRANSMITTING;
                 bool tx_ok = transport_.send_packet(peer.peer_id, *pkt);
 
                 if (tx_ok) {
+                    dtn_safe_strcpy(last_tx_status_, "ACK", sizeof(last_tx_status_));
                     last_transfer_time_ms_ = current_time_ms;
                     char pkt_id[PACKET_ID_MAX_LEN];
                     dtn_safe_strcpy(pkt_id, pkt->header.packet_id, PACKET_ID_MAX_LEN);
@@ -222,6 +289,7 @@ void NodeApp::step_route_and_forward(uint32_t current_time_ms) {
                     // Transmit at most one packet per peer per tick to keep loop responsive
                     break;
                 } else {
+                    dtn_safe_strcpy(last_tx_status_, "FAIL", sizeof(last_tx_status_));
                     // Transmission failed or unacknowledged: bound retry attempts
                     pkt->retry_count++;
                     pkt->next_retry_time_ms = current_time_ms + RETRY_BACKOFF_MS;
@@ -280,6 +348,12 @@ void NodeApp::step_display_update(uint32_t current_time_ms) {
         status.failed_transfers = packets_dropped_;
         status.link_status = transport_.get_link_status();
         dtn_safe_strcpy(status.current_action, router_.get_policy_name(), sizeof(status.current_action));
+        dtn_safe_strcpy(status.last_tx_id, last_tx_id_, PACKET_ID_MAX_LEN);
+        dtn_safe_strcpy(status.last_tx_status, last_tx_status_, sizeof(status.last_tx_status));
+        dtn_safe_strcpy(status.last_rx_id, last_rx_id_, PACKET_ID_MAX_LEN);
+        dtn_safe_strcpy(status.last_rx_payload, last_rx_payload_, sizeof(status.last_rx_payload));
+        dtn_safe_strcpy(status.last_rx_sender, last_rx_sender_, NODE_ID_MAX_LEN);
+        dtn_safe_strcpy(status.ai_decision_str, last_ai_decision_, sizeof(status.ai_decision_str));
 
         display_.update_status(status);
         last_display_time_ms_ = current_time_ms;

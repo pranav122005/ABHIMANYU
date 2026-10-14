@@ -25,6 +25,12 @@ struct NodeStatus {
     uint32_t failed_transfers;              ///< Total failed / rejected attempts
     LinkStatus link_status;                 ///< Current radio status
     char current_action[24];                ///< Short string of current action (e.g. "IDLE", "FWD:nodeB")
+    char last_tx_id[PACKET_ID_MAX_LEN];     ///< Identifier of latest transmitted packet
+    char last_tx_status[16];                ///< Delivery outcome of latest transmit ("ACK", "FAIL", "PENDING")
+    char last_rx_id[PACKET_ID_MAX_LEN];     ///< Identifier of latest received packet
+    char last_rx_payload[32];               ///< Preview of latest received payload
+    char last_rx_sender[NODE_ID_MAX_LEN];   ///< Node ID of latest received sender
+    char ai_decision_str[16];               ///< Latest AI routing evaluation outcome ("FWD", "HOLD")
 };
 
 class IDisplay {

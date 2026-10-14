@@ -44,10 +44,14 @@ def test_firmware_file_structure():
         FIRMWARE_DIR / "include" / "event_logger.h",
         FIRMWARE_DIR / "include" / "node_app.h",
         FIRMWARE_DIR / "include" / "self_test.h",
+        FIRMWARE_DIR / "include" / "esp_now_transport.h",
+        FIRMWARE_DIR / "include" / "oled_display.h",
         FIRMWARE_DIR / "src" / "packet.cpp",
         FIRMWARE_DIR / "src" / "packet_buffer.cpp",
         FIRMWARE_DIR / "src" / "condition_report.cpp",
         FIRMWARE_DIR / "src" / "node_app.cpp",
+        FIRMWARE_DIR / "src" / "esp_now_transport.cpp",
+        FIRMWARE_DIR / "src" / "oled_display.cpp",
         FIRMWARE_DIR / "src" / "main.cpp",
     ]
 
@@ -59,7 +63,7 @@ def test_firmware_file_structure():
 def test_firmware_cxx_test_harness_compilation_and_execution():
     """
     Compiles and executes the native host test harness tests/test_firmware.cpp,
-    verifying 100% pass across all 6 firmware foundation unit tests.
+    verifying 100% pass across all firmware foundation and hardware unit tests.
     """
     compiler = shutil.which("g++") or shutil.which("clang++")
     if not compiler and Path("C:/msys64/ucrt64/bin/g++.exe").exists():
@@ -90,7 +94,7 @@ def test_firmware_cxx_test_harness_compilation_and_execution():
     # Run
     res_run = subprocess.run([str(exe_file)], capture_output=True, text=True, cwd=str(PROJECT_ROOT))
     assert res_run.returncode == 0, f"Firmware tests failed:\n{res_run.stdout}\n{res_run.stderr}"
-    assert "Results: 22 / 22 passed." in res_run.stdout, f"Not all tests passed:\n{res_run.stdout}"
+    assert "Results: 27 / 27 passed." in res_run.stdout, f"Not all tests passed:\n{res_run.stdout}"
 
 
 def test_esp8266_toolchain_presence():
@@ -98,8 +102,8 @@ def test_esp8266_toolchain_presence():
     Checks for the cross-compilation toolchain for ESP8266.
     Documents whether native cross-compilation to Xtensa elf is available or absent.
     """
-    user_scripts = os.path.expanduser("~\\AppData\\Roaming\\Python\\Python312\\Scripts")
-    pio = shutil.which("pio") or shutil.which("platformio") or shutil.which("pio.exe", path=user_scripts)
+    custom_pio = Path(os.path.expanduser("~/.platformio/penv/Scripts/pio.exe"))
+    pio = shutil.which("pio") or shutil.which("platformio") or (str(custom_pio) if custom_pio.exists() else None)
     xtensa_gcc = shutil.which("xtensa-lx106-elf-g++") or shutil.which("xtensa-lx106-elf-gcc")
     arduino_cli = shutil.which("arduino-cli")
 
@@ -115,38 +119,38 @@ def test_esp8266_toolchain_presence():
 
 def test_platformio_target_compilation():
     """
-    Executes PlatformIO cross-compilation for ESP8266 NodeMCU v2 target,
-    confirming firmware.elf and firmware.bin build with 0 errors.
+    Executes PlatformIO cross-compilation for Node A (OLED) and Node B (headless) targets,
+    confirming firmware.bin builds with 0 errors.
     """
+    pio_exe = shutil.which("pio") or shutil.which("platformio")
+    if not pio_exe:
+        custom_pio = Path(os.path.expanduser("~/.platformio/penv/Scripts/pio.exe"))
+        if custom_pio.exists():
+            pio_exe = str(custom_pio)
+
+    if not pio_exe:
+        pytest.skip("PlatformIO executable not found in PATH or default virtualenv")
+
     res = subprocess.run(
-        [sys.executable, "-m", "platformio", "run", "-d", str(FIRMWARE_DIR)],
+        [pio_exe, "run", "-d", str(FIRMWARE_DIR), "-e", "node_a", "-e", "node_b"],
         capture_output=True,
         text=True,
         cwd=str(PROJECT_ROOT)
     )
     assert res.returncode == 0, f"PlatformIO compilation failed:\n{res.stderr}\n{res.stdout}"
     assert "SUCCESS" in res.stdout, f"PlatformIO output did not indicate SUCCESS:\n{res.stdout}"
-    elf_file = FIRMWARE_DIR / ".pio" / "build" / "nodemcuv2" / "firmware.elf"
-    bin_file = FIRMWARE_DIR / ".pio" / "build" / "nodemcuv2" / "firmware.bin"
-    assert elf_file.exists(), "Target firmware.elf does not exist"
-    assert bin_file.exists(), "Target firmware.bin does not exist"
+
+    bin_a = FIRMWARE_DIR / ".pio" / "build" / "node_a" / "firmware.bin"
+    bin_b = FIRMWARE_DIR / ".pio" / "build" / "node_b" / "firmware.bin"
+    assert bin_a.exists(), "Target node_a firmware.bin does not exist"
+    assert bin_b.exists(), "Target node_b firmware.bin does not exist"
 
 
 def test_firmware_realistic_scenarios_validation():
     """
-    Verifies that all 12 realistic host DTN lifecycle scenarios execute and pass:
-    1. Packet buffered for later forwarding
-    2. No peer available, packet remains queued
-    3. Send fails, packet eligible for later retry with backoff
-    4. Duplicate packet suppression (both destination and transit)
-    5. Packet expires while buffered (pruned on TTL expiry)
-    6. Destination reachable, direct delivery completes
-    7. Packet relayed through intermediate node
-    8. Buffer slot limit enforced (rejection on count full)
-    9. Buffer byte limit enforced (rejection on bytes full)
-    10. In-flight transmission protection (concurrent forwarding prevented)
-    11. Missing acknowledgement handling (bounded retry backoff to STATE_FAILED)
-    12. Timer rollover safety across uint32_t wrap-around
+    Verifies that all 17 realistic host DTN lifecycle scenarios execute and pass:
+    - Scenarios 1-12: Core DTN packet buffering, duplicate suppression, TTL expiry, retries
+    - Scenarios 13-17: ESP-NOW frame limits, 2-node exchange, duplicates, AI routing, OLED updates
     """
     exe_file = TESTS_DIR / "test_firmware.exe"
     assert exe_file.exists(), "Binary executable not found; must compile first"
@@ -167,6 +171,11 @@ def test_firmware_realistic_scenarios_validation():
         "test_scenario_10_concurrent_transmission_protection",
         "test_scenario_11_missing_acknowledgement_handling",
         "test_scenario_12_timer_rollover_lifecycle",
+        "test_esp_now_frame_size_and_truncation_safety",
+        "test_2node_bidirectional_espnow_exchange_and_ack",
+        "test_2node_duplicate_packet_suppression",
+        "test_2node_ai_relay_decision_behavior",
+        "test_oled_display_formatting_and_status_update",
     ]
 
     for sc in scenarios:
