@@ -98,3 +98,34 @@ def test_api_endpoints():
     assert res.status_code == 200
     metrics = res.json()
     assert metrics["total_messages"] >= 1
+
+
+def test_shortest_path_calculation():
+    client = TestClient(app)
+
+    # 1. Path between adjacent nodes in default topology (node-01 and node-02 have ring contact)
+    res = client.get("/api/routes/shortest?source_id=node-01&destination_id=node-02")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["feasible"] is True
+    assert data["hops"] >= 1
+    assert data["path"][0] == "node-01"
+    assert data["path"][-1] == "node-02"
+
+    # 2. Same node returns hops=0
+    res = client.get("/api/routes/shortest?source_id=node-01&destination_id=node-01")
+    assert res.status_code == 200
+    assert res.json()["hops"] == 0
+    assert res.json()["status"] == "SAME_NODE"
+
+    # 3. Disconnect node-01 by deactivating all its contacts, or set node offline
+    client.patch("/api/nodes/node-10", json={"status": "offline"})
+    res = client.get("/api/routes/shortest?source_id=node-01&destination_id=node-10")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["feasible"] is False
+    assert data["status"] == "ENDPOINT_OFFLINE"
+
+    # Restore node-10
+    client.patch("/api/nodes/node-10", json={"status": "online"})
+

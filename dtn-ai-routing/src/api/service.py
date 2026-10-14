@@ -455,3 +455,81 @@ class DTNIntegratedService:
             "active_policy": self.active_policy,
             "current_time_ms": self.current_time_ms,
         }
+
+    def calculate_shortest_path(self, source_id: str, destination_id: str) -> Dict[str, Any]:
+        """
+        Calculates the shortest valid path (fewest hops) across currently active contacts
+        and online nodes using Breadth-First Search (BFS).
+        """
+        if source_id == destination_id:
+            return {
+                "source": source_id,
+                "destination": destination_id,
+                "path": [source_id],
+                "hops": 0,
+                "status": "SAME_NODE",
+                "feasible": True,
+            }
+
+        with self.lock:
+            # Query active contacts and online nodes
+            active_contacts = [c for c in self.db.get_contacts() if c["is_active"] == 1]
+            db_nodes = {n["node_id"]: n for n in self.db.get_all_nodes(include_plain_passwords=True)}
+
+            # Build adjacency list considering ONLY online nodes
+            adj: Dict[str, List[str]] = collections.defaultdict(list)
+            for c in active_contacts:
+                u, v = c["node_a"], c["node_b"]
+                u_online = (u in db_nodes and db_nodes[u]["status"] == "online")
+                v_online = (v in db_nodes and db_nodes[v]["status"] == "online")
+                if u_online and v_online:
+                    adj[u].append(v)
+                    adj[v].append(u)
+
+            # Check endpoints availability
+            src_online = (source_id in db_nodes and db_nodes[source_id]["status"] == "online")
+            dst_online = (destination_id in db_nodes and db_nodes[destination_id]["status"] == "online")
+
+            if not src_online or not dst_online:
+                return {
+                    "source": source_id,
+                    "destination": destination_id,
+                    "path": [],
+                    "hops": 0,
+                    "status": "ENDPOINT_OFFLINE",
+                    "feasible": False,
+                }
+
+            # BFS traversal
+            queue = collections.deque([[source_id]])
+            visited = {source_id}
+
+            while queue:
+                current_path = queue.popleft()
+                node = current_path[-1]
+
+                if node == destination_id:
+                    hops = len(current_path) - 1
+                    return {
+                        "source": source_id,
+                        "destination": destination_id,
+                        "path": current_path,
+                        "hops": hops,
+                        "status": "VALID_ROUTE",
+                        "feasible": True,
+                    }
+
+                for neighbor in adj.get(node, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(current_path + [neighbor])
+
+            return {
+                "source": source_id,
+                "destination": destination_id,
+                "path": [],
+                "hops": 0,
+                "status": "NO_VALID_ROUTE",
+                "feasible": False,
+            }
+

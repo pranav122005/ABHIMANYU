@@ -239,7 +239,13 @@ def get_message_route(message_id: str):
         "decisions": decisions,
     }
 
+@app.get("/api/routes/shortest")
+def get_shortest_route(source_id: str = Query(...), destination_id: str = Query(...)):
+    """Calculates the shortest valid path between source and destination using active contacts and online nodes."""
+    return service.calculate_shortest_path(source_id=source_id, destination_id=destination_id)
+
 @app.get("/api/events")
+
 def list_events(limit: int = Query(100, ge=1, le=1000)):
     return {"events": db.get_events(limit=limit)}
 
