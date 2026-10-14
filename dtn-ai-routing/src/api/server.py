@@ -265,7 +265,7 @@ def update_contact(req: ContactUpdateRequest):
     db.set_contact(req.node_a, req.node_b, req.is_active)
     # Trigger an immediate step to evaluate any newly opened contacts
     res = service.step_simulation(step_delta_ms=0)
-    return {"status": "updated", "contact": req.dict(), "step_result": res}
+    return {"status": "updated", "contact": req.model_dump(), "step_result": res}
 
 @app.get("/api/simulation/state")
 def get_simulation_state():

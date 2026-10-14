@@ -396,7 +396,6 @@ class DTNIntegratedService:
                     msg = self.db.get_message(pkt.packet_id)
                     if msg:
                         msg["hops"] = replica.hops
-                        msg["current_holder"] = receiver.node_id
                         path = msg.get("route_path", [])
                         if receiver.node_id not in path:
                             path.append(receiver.node_id)
@@ -404,6 +403,7 @@ class DTNIntegratedService:
 
                         if outcome == "DELIVERED":
                             msg["status"] = "delivered"
+                            msg["current_holder"] = receiver.node_id
                             msg["delivered_at_utc"] = datetime.now(timezone.utc).isoformat()
                             msg["delivery_delay_ms"] = current_time_ms - pkt.creation_time_ms
                             self.db.record_event(
@@ -415,7 +415,9 @@ class DTNIntegratedService:
                                 details=f"Bundle successfully delivered to destination {receiver.node_id}! Delay: {msg['delivery_delay_ms']}ms",
                             )
                         else:
-                            msg["status"] = "transferred_to_next_hop"
+                            if msg.get("status") != "delivered":
+                                msg["status"] = "transferred_to_next_hop"
+                                msg["current_holder"] = receiver.node_id
                             self.db.record_event(
                                 time_ms=current_time_ms,
                                 event_type="FORWARD_SUCCESS",
