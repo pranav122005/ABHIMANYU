@@ -142,6 +142,7 @@ class DTNIntegratedService:
         payload: str,
         priority: int = 1,
         ttl_ms: int = 14_400_000,
+        message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Ingests a user message, packs it into a real Packet, stores it in the source DTNNode buffer,
@@ -162,7 +163,12 @@ class DTNIntegratedService:
             now_utc = datetime.now(timezone.utc).isoformat()
             payload_bytes = payload.encode("utf-8")
             size_bytes = len(payload_bytes) + 78  # 78 bytes wire frame min
-            msg_id = f"msg_{int(time.time() * 1000)}_{source_id}_{destination_id}"
+            msg_id = message_id.strip() if (message_id and message_id.strip()) else f"msg_{int(time.time() * 1000)}_{source_id}_{destination_id}"
+
+            # Check for existing message to prevent duplicate creation
+            existing = self.db.get_message(msg_id)
+            if existing:
+                return existing
 
             packet = Packet(
                 packet_id=msg_id,

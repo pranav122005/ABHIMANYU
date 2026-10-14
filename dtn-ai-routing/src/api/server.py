@@ -19,6 +19,7 @@ SRC_DIR = Path(__file__).resolve().parent.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
+from dtn_simulator import NodeBuffer
 from api.db import DemoDatabase
 from api.service import DTNIntegratedService
 
@@ -65,6 +66,7 @@ class NodeLoginResponse(BaseModel):
     status: str
 
 class MessageCreateRequest(BaseModel):
+    message_id: Optional[str] = None
     source_id: str
     destination_id: str
     payload: str
@@ -205,6 +207,7 @@ def create_message(req: MessageCreateRequest):
             payload=req.payload,
             priority=req.priority,
             ttl_ms=req.ttl_ms,
+            message_id=req.message_id,
         )
         return msg
     except ValueError as e:
