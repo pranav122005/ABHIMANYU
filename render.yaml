@@ -1,0 +1,24 @@
+# Render Blueprint for ABHIMANYU DTN AI Routing Backend
+# Target: Free Web Service (Docker Runtime)
+# Repository: https://github.com/pranav122005/ABHIMANYU
+# Target branch: dtn-engine-sync
+
+services:
+  - type: web
+    name: abhimanyu-dtn-backend
+    runtime: docker
+    plan: free
+    branch: dtn-engine-sync
+    rootDir: dtn-ai-routing
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: DTN_ENV
+        value: production
+      - key: DTN_DB_PATH
+        value: /tmp/demo_system.db
+      - key: DTN_ADMIN_TOKEN
+        generateValue: true
+      - key: PORT
+        value: 8000

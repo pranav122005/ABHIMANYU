@@ -16,18 +16,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY src/ /app/src/
 COPY models/stage5/ /app/models/stage5/
 
-# Create mount point for Railway persistent volume
-RUN mkdir -p /data
+# Create directory for runtime storage
+RUN mkdir -p /data /tmp
 
 # Runtime environment configuration
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src
 ENV DTN_ENV=production
-ENV DTN_DB_PATH=/data/demo_system.db
+ENV DTN_DB_PATH=/tmp/demo_system.db
 ENV PORT=8000
 
 EXPOSE 8000
 
-# Start FastAPI server binding to 0.0.0.0 using Railway dynamic PORT
+# Start FastAPI server binding to 0.0.0.0 using dynamic cloud PORT
 CMD ["sh", "-c", "uvicorn api.server:app --host 0.0.0.0 --port ${PORT:-8000}"]
 

@@ -210,6 +210,7 @@ def get_auth_actor(
 # Public & Node Endpoints
 # -----------------------------------------------------------------------------
 
+@app.get("/health")
 @app.get("/api/health")
 def health_check():
     """Public health verification."""

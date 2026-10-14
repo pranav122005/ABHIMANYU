@@ -94,6 +94,88 @@ curl -H "X-Admin-Token: <your-admin-token>" https://<your-railway-domain>.up.rai
 
 ---
 
+## 2B. Component 1B: FastAPI Backend Deployment (Render Free Web Service)
+
+Render provides an instant, zero-cost web service hosting option with Docker support and automated GitHub synchronization.
+
+### 2B.1 Render Architecture & Blueprint (`render.yaml`)
+A root-level `render.yaml` Blueprint is provided at the repository root to automatically configure the service:
+
+```yaml
+services:
+  - type: web
+    name: abhimanyu-dtn-backend
+    runtime: docker
+    plan: free
+    branch: dtn-engine-sync
+    rootDir: dtn-ai-routing
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: DTN_ENV
+        value: production
+      - key: DTN_DB_PATH
+        value: /tmp/demo_system.db
+      - key: DTN_ADMIN_TOKEN
+        generateValue: true
+      - key: PORT
+        value: 8000
+```
+
+### 2B.2 Step-by-Step Render Deployment via Blueprint
+1. Log in to [dashboard.render.com](https://dashboard.render.com/).
+2. Click **New +** -> **Blueprint**.
+3. Connect your GitHub repository: `https://github.com/pranav122005/ABHIMANYU`.
+4. Select the target branch: `dtn-engine-sync`.
+5. Render detects `render.yaml` and displays the service plan:
+   - **Service Name**: `abhimanyu-dtn-backend`
+   - **Runtime**: `Docker`
+   - **Plan**: `Free`
+   - **Root Directory**: `dtn-ai-routing`
+   - **Branch**: `dtn-engine-sync`
+   - **Health Check Path**: `/api/health`
+6. Click **Apply**. Render will automatically build the Docker image, generate a secure 32-character random `DTN_ADMIN_TOKEN`, and start the service.
+
+### 2B.3 Alternative: Manual Service Creation on Render
+If deploying without Blueprint:
+1. Click **New +** -> **Web Service** -> **Build and deploy from a Git repository**.
+2. Select repository: `pranav122005/ABHIMANYU`.
+3. Configure the settings:
+   - **Name**: `abhimanyu-dtn-backend`
+   - **Branch**: `dtn-engine-sync`
+   - **Root Directory**: `dtn-ai-routing`
+   - **Runtime**: `Docker`
+   - **Instance Type**: `Free`
+   - **Health Check Path**: `/api/health`
+4. Under **Environment Variables**, add:
+   - `DTN_ENV`: `production`
+   - `DTN_DB_PATH`: `/tmp/demo_system.db`
+   - `DTN_ADMIN_TOKEN`: Click **Generate** (or enter a 32+ char secret).
+   - `PORT`: `8000`
+5. Click **Create Web Service**.
+
+### 2B.4 Important Notes for Render Free Tier
+* **Ephemeral Storage Notice**: The Render Free tier uses ephemeral container storage. SQLite databases located at `/tmp/demo_system.db` are temporary. If the container restarts or spins down due to inactivity, messages and contact state will be re-initialized from default virtual node templates. **Database persistence is not guaranteed on the free tier**.
+* **Idle Spin-Down**: Free instances spin down after 15 minutes of inactivity. When a new incoming request arrives, Render spins up the container (cold start ~30–50 seconds).
+* **Port Binding**: The Docker container binds to `0.0.0.0:${PORT:-8000}`, adapting automatically to Render's dynamic port assignment.
+* **CORS Behavior**: In production mode (`DTN_ENV=production`), CORS origins are strictly restricted. The Flutter desktop/Android apps connect natively without browser CORS constraints. If a browser-based web frontend is deployed, specify its origin in `DTN_CORS_ORIGINS`.
+
+### 2B.5 Verifying the Render Deployment
+Once deployed and live on Render:
+```bash
+# 1. Health check (public, returns HTTP 200 without auth)
+curl https://abhimanyu-dtn-backend.onrender.com/api/health
+
+# Expected response:
+# {"status":"healthy","service":"ABHIMANYU DTN Integrated Demo API","environment":"production","virtual_time_ms":1000000,"nodes_loaded":10,"ai_model_loaded":true}
+
+# 2. Check node listing
+curl https://abhimanyu-dtn-backend.onrender.com/api/nodes
+```
+
+---
+
 ## 3. Component 2: Monitoring Dashboard Deployment (Streamlit Cloud)
 
 ### 3.1 Overview
