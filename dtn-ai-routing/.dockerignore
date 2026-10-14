@@ -1,0 +1,40 @@
+# Python byte code and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases and mobility trace datasets
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.csv
+data/raw/
+data/processed/
+
+# Local build and test artifacts
+*.exe
+*.o
+*.obj
+*.elf
+*.bin
+tests/
+reports/
+firmware/
+
+# Development environments and IDEs
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+
+# Git metadata and secrets
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+
