@@ -64,9 +64,11 @@ def test_api_endpoints():
     assert res.status_code == 200
     token = res.json()["token"]
     assert token != ""
+    admin_headers = {"X-Admin-Token": "dev-admin-secret-token"}
+    auth_headers = {"Authorization": f"Bearer {token}"}
 
     # 4. Send message
-    res = client.post("/api/messages", json={
+    res = client.post("/api/messages", headers=auth_headers, json={
         "source_id": "node-01",
         "destination_id": "node-02",
         "payload": "Hello DTN mesh!",
@@ -79,18 +81,18 @@ def test_api_endpoints():
     msg_id = msg["message_id"]
 
     # 5. Check route and decisions
-    res = client.get(f"/api/messages/{msg_id}/route")
+    res = client.get(f"/api/messages/{msg_id}/route", headers=auth_headers)
     assert res.status_code == 200
     route_info = res.json()
     assert route_info["message_id"] == msg_id
     assert "decisions" in route_info
 
-    # 6. Query inbox
-    res = client.get("/api/nodes/node-02/inbox")
+    # 6. Query inbox (admin or recipient node-02)
+    res = client.get("/api/nodes/node-02/inbox", headers=admin_headers)
     assert res.status_code == 200
 
     # 7. Step simulation
-    res = client.post("/api/simulation/step", json={"step_delta_ms": 10000})
+    res = client.post("/api/simulation/step", headers=admin_headers, json={"step_delta_ms": 10000})
     assert res.status_code == 200
 
     # 8. Query metrics
@@ -102,6 +104,7 @@ def test_api_endpoints():
 
 def test_shortest_path_calculation():
     client = TestClient(app)
+    admin_headers = {"X-Admin-Token": "dev-admin-secret-token"}
 
     # 1. Path between adjacent nodes in default topology (node-01 and node-02 have ring contact)
     res = client.get("/api/routes/shortest?source_id=node-01&destination_id=node-02")
@@ -119,7 +122,8 @@ def test_shortest_path_calculation():
     assert res.json()["status"] == "SAME_NODE"
 
     # 3. Disconnect node-01 by deactivating all its contacts, or set node offline
-    client.patch("/api/nodes/node-10", json={"status": "offline"})
+    patch_res = client.patch("/api/nodes/node-10", headers=admin_headers, json={"status": "offline"})
+    assert patch_res.status_code == 200
     res = client.get("/api/routes/shortest?source_id=node-01&destination_id=node-10")
     assert res.status_code == 200
     data = res.json()
@@ -127,5 +131,6 @@ def test_shortest_path_calculation():
     assert data["status"] == "ENDPOINT_OFFLINE"
 
     # Restore node-10
-    client.patch("/api/nodes/node-10", json={"status": "online"})
+    patch_res2 = client.patch("/api/nodes/node-10", headers=admin_headers, json={"status": "online"})
+    assert patch_res2.status_code == 200
 
